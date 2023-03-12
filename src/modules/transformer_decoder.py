@@ -18,6 +18,7 @@ from modules.multihead_attention import MultiheadAttention
 import numpy as np
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 import copy
+torch.autograd.set_detect_anomaly(True)
 
 
 def make_positions(tensor, padding_idx, left_pad):
@@ -312,8 +313,20 @@ class DecoderTransformer(nn.Module):
                 ingr_features,
                 ingr_mask,
                 incremental_state,
-                img_features
+                img_features ## 여기가 문제..
             )
+        # for p, layer in enumerate(self.layers):
+        #     x_clone = x.clone()
+        #     incr_state_clone = copy.deepcopy(incremental_state)
+        #     img_feat_clone = img_features.clone()
+
+        #     x = layer(
+        #         x_clone,
+        #         ingr_features,
+        #         ingr_mask,
+        #         incr_state_clone,
+        #         img_feat_clone
+        #     )
             
         # T x B x C -> B x T x C
         x = x.transpose(0, 1)

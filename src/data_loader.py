@@ -34,7 +34,7 @@ class Recipe1MDataset(data.Dataset):
         self.split = split
         for i, entry in enumerate(self.dataset):
             if len(entry['images']) == 0:
-                continue
+                continue ## image 있는 id만 append
             self.ids.append(i)
 
         self.root = os.path.join(data_dir, 'images', split)
@@ -67,7 +67,7 @@ class Recipe1MDataset(data.Dataset):
         sample = self.dataset[self.ids[index]]
         img_id = sample['id']
         captions = sample['tokenized']
-        paths = sample['images'][0:self.maxnumims]
+        paths = sample['images'][0:self.maxnumims] ## 무조건 있음 (images 없는 애들은 위에서 빼버렸거든) 
 
         idx = index
 
@@ -128,7 +128,7 @@ class Recipe1MDataset(data.Dataset):
                 image = self.transform(image)
             image_input = image
 
-        # Convert caption (string) to word ids.
+        # Convert caption (string) to word ids. ## instructions
         caption = []
 
         caption = self.caption_to_idxs(tokens, caption)

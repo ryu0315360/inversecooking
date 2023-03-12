@@ -115,8 +115,9 @@ class InverseCookingModel(nn.Module):
         if sample:
             return self.sample(img_inputs, greedy=True)
 
-        targets = captions[:, 1:]
-        targets = targets.contiguous().view(-1)
+        if captions is not None:
+            targets = captions[:, 1:]
+            targets = targets.contiguous().view(-1)
 
         img_features = self.image_encoder(img_inputs, keep_cnn_gradients)
 

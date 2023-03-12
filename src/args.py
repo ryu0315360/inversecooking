@@ -70,7 +70,7 @@ def get_parser():
     parser.add_argument('--num_epochs', type=int, default=400,
                         help='maximum number of epochs')
 
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=256)
 
     parser.add_argument('--num_workers', type=int, default=8)
 
@@ -86,8 +86,8 @@ def get_parser():
     parser.add_argument('--finetune_after', type=int, default=-1,
                         help='epoch to start training cnn. -1 is never, 0 is from the beginning')
 
-    parser.add_argument('--loss_weight', nargs='+', type=float, default=[1.0, 0.0, 0.0, 0.0],
-                        help='training loss weights. 1) instruction, 2) ingredient, 3) eos 4) cardinality')
+    parser.add_argument('--loss_weight', nargs='+', type=float, default=[1000.0, 1000.0, 1.0, 1.0],
+                        help='training loss weights. 1) ingredient, 2) quantity, 3) eos 4) cardinality')
 
     parser.add_argument('--max_eval', type=int, default=4096,
                         help='number of validation samples to evaluate during training')
@@ -137,7 +137,7 @@ def get_parser():
 
     parser.add_argument('--log_term', dest='log_term', action='store_true',
                         help='if used, shows training log in stdout instead of saving it to a file.')
-    parser.set_defaults(log_term=False)
+    parser.set_defaults(log_term=True)
 
     parser.add_argument('--notensorboard', dest='tensorboard', action='store_false',
                         help='if used, tensorboard logs will not be saved')
@@ -162,6 +162,9 @@ def get_parser():
     parser.add_argument('--use_true_ingrs', dest='use_true_ingrs', action='store_true',
                         help='if used, true ingredients will be used as input to obtain the recipe in evaluation')
     parser.set_defaults(use_true_ingrs=False)
+
+    parser.add_argument('--quantity_hidden_size', type=int, default=1024,
+                        help='decide the hidden layer size of quantity MLP')
 
     args = parser.parse_args()
 

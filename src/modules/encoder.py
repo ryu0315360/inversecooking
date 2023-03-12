@@ -11,12 +11,13 @@ class EncoderCNN(nn.Module):
     def __init__(self, embed_size, dropout=0.5, image_model='resnet101', pretrained=True):
         """Load the pretrained ResNet-152 and replace top fc layer."""
         super(EncoderCNN, self).__init__()
-        resnet = globals()[image_model](pretrained=pretrained)
+        # resnet = globals()['image_model'](pretrained=pretrained) ## 원래 이거였음
+        resnet = resnet50(pretrained = pretrained)
         modules = list(resnet.children())[:-2]  # delete the last fc layer.
         self.resnet = nn.Sequential(*modules)
 
         self.linear = nn.Sequential(nn.Conv2d(resnet.fc.in_features, embed_size, kernel_size=1, padding=0),
-                                    nn.Dropout2d(dropout))
+                                    nn.Dropout2d(dropout)) ## embed_size = 512
 
     def forward(self, images, keep_cnn_gradients=False):
         """Extract feature vectors from input images."""

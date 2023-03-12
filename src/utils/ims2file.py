@@ -32,25 +32,26 @@ def main(args):
     datasets = {}
     imname2pos = {'train': {}, 'val': {}, 'test': {}}
     for split in ['train', 'val', 'test']:
-        datasets[split] = pickle.load(open(os.path.join(args.save_dir, args.suff + 'recipe1m_' + split + '.pkl'), 'rb'))
+        datasets[split] = pickle.load(open(os.path.join(args.save_dir, args.suff + 'quantity_recipe1m_' + split + '.pkl'), 'rb'))
 
-        parts[split] = lmdb.open(os.path.join(args.save_dir, 'lmdb_'+split), map_size=int(MAX_SIZE))
+        parts[split] = lmdb.open(os.path.join(args.save_dir, 'new_lmdb_'+split), map_size=int(MAX_SIZE))
         with parts[split].begin() as txn:
             present_entries = [key for key, _ in txn.cursor()]
         j = 0
         for i, entry in tqdm(enumerate(datasets[split])):
-            impaths = entry['images'][0:5]
+            if len(entry['quantity']) != 0: ## quantity 있는 경우만..
+                impaths = entry['images'][0:5]
 
-            for n, p in enumerate(impaths):
-                if n == args.maxnumims:
-                    break
-                if p.encode() not in present_entries:
-                    im = load_and_resize(os.path.join(args.root, 'images', split), p, args.imscale)
-                    im = np.array(im).astype(np.uint8)
-                    with parts[split].begin(write=True) as txn:
-                        txn.put(p.encode(), im)
-                imname2pos[split][p] = j
-                j += 1
+                for n, p in enumerate(impaths):
+                    if n == args.maxnumims:
+                        break
+                    if p.encode() not in present_entries:
+                        im = load_and_resize(os.path.join(args.root, 'images', split), p, args.imscale)
+                        im = np.array(im).astype(np.uint8)
+                        with parts[split].begin(write=True) as txn:
+                            txn.put(p.encode(), im)
+                    imname2pos[split][p] = j
+                    j += 1
     pickle.dump(imname2pos, open(os.path.join(args.save_dir, 'imname2pos.pkl'), 'wb'))
 
 
@@ -62,7 +63,7 @@ def test(args):
     for k, v in paths.items():
         path = k
         break
-    image_file = lmdb.open(os.path.join(args.save_dir, 'lmdb_' + 'val'), max_readers=1, readonly=True,
+    image_file = lmdb.open(os.path.join(args.save_dir, 'new_lmdb_' + 'val'), max_readers=1, readonly=True,
                            lock=False, readahead=False, meminit=False)
     with image_file.begin(write=False) as txn:
         image = txn.get(path.encode())

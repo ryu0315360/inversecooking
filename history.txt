@@ -1,0 +1,4 @@
+- quantityOnly pkl: quantity info & image 가 있는 datapoints만 모아놓은 것 (20000?)
+- quantity pkl: image 없는 건 제외, quantity info 없는 것들은 포함. (ingredient decoder 훈련시키려고)
+
+- model 3: weighted loss, resnet linear, ingredient decoder, quantity decoder 훈련, quantity info 있는 애들만 훈련 (시간상)

@@ -1,6 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 import nltk
+nltk.download('punkt')
 import pickle
 import argparse
 from collections import Counter
@@ -9,6 +10,7 @@ import os
 from tqdm import *
 import numpy as np
 import re
+from fractions import Fraction
 
 
 class Vocabulary(object):
@@ -152,11 +154,17 @@ def build_vocab_recipe1m(args):
     dets = json.load(open(os.path.join(args.recipe1m_path, 'det_ingrs.json'), 'r'))
     layer1 = json.load(open(os.path.join(args.recipe1m_path, 'layer1.json'), 'r'))
     layer2 = json.load(open(os.path.join(args.recipe1m_path, 'layer2.json'), 'r'))
+    layer_quantity = json.load(open('/home/donghee/inversecooking/recipe1M+/recipes_with_nutritional_info.json', 'r'))
 
     id2im = {}
 
     for i, entry in enumerate(layer2):
         id2im[entry['id']] = i
+
+    id2quantity = {}
+
+    for i, entry in enumerate(layer_quantity):
+        id2quantity[entry['id']] = i
 
     print("Loaded data.")
     print("Found %d recipes in the dataset." % (len(layer1)))
@@ -176,7 +184,7 @@ def build_vocab_recipe1m(args):
     if os.path.exists(ingrs_file) and os.path.exists(instrs_file) and not args.forcegen:
         print ("loading pre-extracted word counters")
         counter_ingrs = pickle.load(open(args.save_path + 'allingrs_count.pkl', 'rb'))
-        counter_toks = pickle.load(open(args.save_path + 'allwords_count.pkl', 'rb'))
+        # counter_toks = pickle.load(open(args.save_path + 'allwords_count.pkl', 'rb'))
     else:
         counter_toks = Counter()
         counter_ingrs = Counter()
@@ -219,7 +227,12 @@ def build_vocab_recipe1m(args):
 
             # tokenize sentences and update counter
             update_counter(instrs_list, counter_toks, istrain=entry['partition'] == 'train')
-            title = nltk.tokenize.word_tokenize(entry['title'].lower())
+            try:
+                title = nltk.tokenize.word_tokenize(entry['title'].lower())
+            except:
+                print("No title, pass")
+                continue
+            
             if entry['partition'] == 'train':
                 counter_toks.update(title)
             if entry['partition'] == 'train':
@@ -256,20 +269,20 @@ def build_vocab_recipe1m(args):
     counter_ingrs, cluster_ingrs = remove_plurals(counter_ingrs, cluster_ingrs)
 
     # If the word frequency is less than 'threshold', then the word is discarded.
-    words = [word for word, cnt in counter_toks.items() if cnt >= args.threshold_words]
+    # words = [word for word, cnt in counter_toks.items() if cnt >= args.threshold_words]
     ingrs = {word: cnt for word, cnt in counter_ingrs.items() if cnt >= args.threshold_ingrs}
 
     # Recipe vocab
     # Create a vocab wrapper and add some special tokens.
-    vocab_toks = Vocabulary()
-    vocab_toks.add_word('<start>')
-    vocab_toks.add_word('<end>')
-    vocab_toks.add_word('<eoi>')
+    # vocab_toks = Vocabulary()
+    # vocab_toks.add_word('<start>')
+    # vocab_toks.add_word('<end>')
+    # vocab_toks.add_word('<eoi>')
 
     # Add the words to the vocabulary.
-    for i, word in enumerate(words):
-        vocab_toks.add_word(word)
-    vocab_toks.add_word('<pad>')
+    # for i, word in enumerate(words):
+    #     vocab_toks.add_word(word)
+    # vocab_toks.add_word('<pad>')
 
     # Ingredient vocab
     # Create a vocab wrapper for ingredients
@@ -284,7 +297,7 @@ def build_vocab_recipe1m(args):
     _ = vocab_ingrs.add_word('<pad>', idx)
 
     print("Total ingr vocabulary size: {}".format(len(vocab_ingrs)))
-    print("Total token vocabulary size: {}".format(len(vocab_toks)))
+    # print("Total token vocabulary size: {}".format(len(vocab_toks)))
 
     dataset = {'train': [], 'val': [], 'test': []}
 
@@ -294,11 +307,58 @@ def build_vocab_recipe1m(args):
     for i, entry in tqdm(enumerate(layer1)):
 
         # get all instructions for this recipe
-        instrs = entry['instructions']
+        # instrs = entry['instructions']
 
-        instrs_list = []
+        # instrs_list = []
         ingrs_list = []
         images_list = []
+
+        if entry['id'] in id2im.keys():
+            ims = layer2[id2im[entry['id']]]
+
+            # copy image paths for this recipe
+            for im in ims['images']:
+                images_list.append(im['id'])
+        
+        if len(images_list) == 0:
+            continue ## no image
+
+        ### Quantity
+        quantity_list = []
+        unit_list = []
+        if entry['id'] in id2quantity.keys():
+            info = layer_quantity[id2quantity[entry['id']]]
+            for q, u in zip(info['quantity'], info['unit']):
+                quantity_str = q['text']
+
+                
+                if 'to' in quantity_str or '-' in quantity_str: ## 'to', '-' 경우 둘 중 하나 평균처리..
+                    quantity_str = quantity_str.split('-')
+                    if len(quantity_str) ==1:
+                        quantity_str = quantity_str[0].split('to')
+                    
+                    quantity1 = sum(Fraction(s) for s in quantity_str[0].split())
+                    quantity2 = sum(Fraction(s) for s in quantity_str[1].split())
+                    quantity_float1 = float(quantity1)
+                    quantity_float2 = float(quantity2)
+                    quantity_float = (quantity_float1 + quantity_float2) / 2
+                
+                else:
+                    quantity = sum(Fraction(s) for s in quantity_str.split())
+                    quantity_float = float(quantity)
+
+             
+                    # print("fraction error: ", quantity_str)
+                    # quantity_list = []
+                    # unit_list = []
+                    
+
+                quantity_list.append(quantity_float) ## 1/2 -> 0.5
+                unit_list.append(u['text'])
+        # else:
+        #     continue ## no quantity
+
+        ###
 
         # retrieve pre-detected ingredients for this entry
         det_ingrs = dets[idx2ind[entry['id']]]['ingredients']
@@ -309,63 +369,62 @@ def build_vocab_recipe1m(args):
             if len(det_ingr) > 0 and valid[j]:
                 det_ingr_undrs = get_ingredient(det_ingr, replace_dict_ingrs)
                 ingrs_list.append(det_ingr_undrs)
-                label_idx = vocab_ingrs(det_ingr_undrs)
+                label_idx = vocab_ingrs(det_ingr_undrs) ## non-matching ingr - <pad>
                 if label_idx is not vocab_ingrs('<pad>') and label_idx not in labels:
                     labels.append(label_idx)
 
         # get raw text for instructions of this entry
-        acc_len = 0
-        for instr in instrs:
-            instr = instr['text']
-            instr = get_instruction(instr, replace_dict_instrs)
-            if len(instr) > 0:
-                acc_len += len(instr)
-                instrs_list.append(instr)
+        # acc_len = 0
+        # for instr in instrs:
+        #     instr = instr['text']
+        #     instr = get_instruction(instr, replace_dict_instrs)
+        #     if len(instr) > 0:
+        #         acc_len += len(instr)
+        #         instrs_list.append(instr)
 
-        # we discard recipes with too many or too few ingredients or instruction words
-        if len(labels) < args.minnumingrs or len(instrs_list) < args.minnuminstrs \
-                or len(instrs_list) >= args.maxnuminstrs or len(labels) >= args.maxnumingrs \
-                or acc_len < args.minnumwords:
-            continue
+        # # we discard recipes with too many or too few ingredients or instruction words
+        # if len(labels) < args.minnumingrs or len(instrs_list) < args.minnuminstrs \
+        #         or len(instrs_list) >= args.maxnuminstrs or len(labels) >= args.maxnumingrs \
+        #         or acc_len < args.minnumwords:
+        #     continue
 
-        if entry['id'] in id2im.keys():
-            ims = layer2[id2im[entry['id']]]
 
-            # copy image paths for this recipe
-            for im in ims['images']:
-                images_list.append(im['id'])
 
         # tokenize sentences
-        toks = []
+        # toks = []
 
-        for instr in instrs_list:
-            tokens = nltk.tokenize.word_tokenize(instr)
-            toks.append(tokens)
+        # for instr in instrs_list:
+        #     tokens = nltk.tokenize.word_tokenize(instr)
+        #     toks.append(tokens)
 
-        title = nltk.tokenize.word_tokenize(entry['title'].lower())
+        try:
+            title = nltk.tokenize.word_tokenize(entry['title'].lower())
+        except:
+            print("no title")
+            continue
 
-        newentry = {'id': entry['id'], 'instructions': instrs_list, 'tokenized': toks,
-                    'ingredients': ingrs_list, 'images': images_list, 'title': title}
+        newentry = {'id': entry['id'],
+                    'ingredients': ingrs_list, 'quantity': quantity_list, 'unit': unit_list, 'images': images_list, 'title': title}
         dataset[entry['partition']].append(newentry)
 
     print('Dataset size:')
     for split in dataset.keys():
         print(split, ':', len(dataset[split]))
 
-    return vocab_ingrs, vocab_toks, dataset
+    return vocab_ingrs, dataset
 
 
 def main(args):
 
-    vocab_ingrs, vocab_toks, dataset = build_vocab_recipe1m(args)
+    vocab_ingrs, dataset = build_vocab_recipe1m(args)
 
-    with open(os.path.join(args.save_path, args.suff+'recipe1m_vocab_ingrs.pkl'), 'wb') as f:
-        pickle.dump(vocab_ingrs, f)
-    with open(os.path.join(args.save_path, args.suff+'recipe1m_vocab_toks.pkl'), 'wb') as f:
-        pickle.dump(vocab_toks, f)
+    # with open(os.path.join(args.save_path, args.suff+'quantity_recipe1m_vocab_ingrs.pkl'), 'wb') as f:
+    #     pickle.dump(vocab_ingrs, f)
+    # with open(os.path.join(args.save_path, args.suff+'recipe1m_vocab_toks.pkl'), 'wb') as f:
+    #     pickle.dump(vocab_toks, f)
 
     for split in dataset.keys():
-        with open(os.path.join(args.save_path, args.suff+'recipe1m_' + split + '.pkl'), 'wb') as f:
+        with open(os.path.join(args.save_path, args.suff+'quantity_recipe1m_' + split + '.pkl'), 'wb') as f:
             pickle.dump(dataset[split], f)
 
 
@@ -396,7 +455,7 @@ if __name__ == '__main__':
     parser.add_argument('--minnuminstrs', type=int, default=2,
                         help='max number of instructions (sentences)')
 
-    parser.add_argument('--minnumingrs', type=int, default=2,
+    parser.add_argument('--minnumingrs', type=int, default=1,
                         help='max number of ingredients')
 
     parser.add_argument('--minnumwords', type=int, default=20,

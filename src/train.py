@@ -237,7 +237,8 @@ def main(args):
                                'eos_loss': [], 'loss': [],
                                'iou': [], 'perplexity': [], 'iou_sample': [],
                                'f1': [],
-                               'card_penalty': []}
+                               'card_penalty': [],
+                               'quantity_loss': []}
 
             error_types = {'tp_i': 0, 'fp_i': 0, 'fn_i': 0, 'tn_i': 0,
                            'tp_all': 0, 'fp_all': 0, 'fn_all': 0}
