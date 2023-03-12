@@ -110,3 +110,6 @@ venv.bak/
 .idea/
 *.bin
 # *.ckpt
+
+data
+recipe1M
