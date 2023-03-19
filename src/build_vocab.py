@@ -153,7 +153,7 @@ def build_vocab_recipe1m(args):
     print ("Loading data...")
     dets = json.load(open(os.path.join(args.recipe1m_path, 'det_ingrs.json'), 'r'))
     layer1 = json.load(open(os.path.join(args.recipe1m_path, 'layer1.json'), 'r'))
-    layer2 = json.load(open(os.path.join(args.recipe1m_path, 'layer2.json'), 'r'))
+    layer2 = json.load(open(os.path.join(args.recipe1m_path, 'layer2_1M_clean.json'), 'r'))
     layer_quantity = json.load(open('/home/donghee/inversecooking/recipe1M+/recipes_with_nutritional_info.json', 'r'))
 
     id2im = {}
@@ -424,7 +424,7 @@ def main(args):
     #     pickle.dump(vocab_toks, f)
 
     for split in dataset.keys():
-        with open(os.path.join(args.save_path, args.suff+'quantity_recipe1m_' + split + '.pkl'), 'wb') as f:
+        with open(os.path.join(args.save_path, args.suff+'clean_recipe1m_' + split + '.pkl'), 'wb') as f:
             pickle.dump(dataset[split], f)
 
 

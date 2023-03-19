@@ -3,6 +3,15 @@ import pickle
 from collections import Counter
 import json
 
+with open("/home/donghee/inversecooking/recipe1M/extended_layer2.json", 'r') as f:
+    layer2 = json.load(f)
+
+print(len(layer2))
+ids = [entry['id'] for entry in layer2]
+
+print(len(ids))
+print(len(set(ids)))
+
 # splits = ['train', 'val', 'test']
 # c = 0
 # for split in splits:
@@ -45,31 +54,31 @@ import json
 #     with open('/home/donghee/inversecooking/jsons/quantity_counter.json', 'w+') as f:
 #         json.dump(sorted_dict, f, indent=4)
 
-def single_food_counter():
-    with open('/home/donghee/inversecooking/recipe1M/layer1.json', 'r') as f:
-        dataset_recipe = json.load(f)
+# def single_food_counter():
+#     with open('/home/donghee/inversecooking/recipe1M/layer1.json', 'r') as f:
+#         dataset_recipe = json.load(f)
     
-    with open('/home/donghee/inversecooking/recipe1M/layer2.json', 'r') as f:
-        dataset_image = json.load(f)
+#     with open('/home/donghee/inversecooking/recipe1M/layer2.json', 'r') as f:
+#         dataset_image = json.load(f)
     
-    ids = set()
-    for sample in dataset_image:
-        ids.add(sample['id'])
+#     ids = set()
+#     for sample in dataset_image:
+#         ids.add(sample['id'])
     
-    del dataset_image
+#     del dataset_image
     
-    single_wimage = 0
-    single = 0
-    for sample in dataset_recipe:
-        if len(sample['ingredients']) != 1:
-            continue
-        else: ## single ingredient
-            single += 1
-            if sample['id'] in ids: ## single and having image
-                single_wimage += 1
+#     single_wimage = 0
+#     single = 0
+#     for sample in dataset_recipe:
+#         if len(sample['ingredients']) != 1:
+#             continue
+#         else: ## single ingredient
+#             single += 1
+#             if sample['id'] in ids: ## single and having image
+#                 single_wimage += 1
     
-    print("# single ingredient samples: ", single)
-    print("# single ingredient with image samples: ", single_wimage)
+#     print("# single ingredient samples: ", single)
+#     print("# single ingredient with image samples: ", single_wimage)
 
 
-single_food_counter()
+# single_food_counter()

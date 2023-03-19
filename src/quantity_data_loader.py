@@ -148,7 +148,11 @@ class Recipe1MDataset(data.Dataset):
                 except:
                     print ("Image id not found in lmdb. Loading jpeg file...")
                     image = Image.open(os.path.join(self.root, path[0], path[1],
-                                                    path[2], path[3], path)).convert('RGB')
+                                                        path[2], path[3], path)).convert('RGB')
+                    # except:
+                    #     image_input = None
+                    #     print("Fail to load image. not use this data.")
+                    #     return image_input, ingrs_gt, quantity_gt, img_id, path
             else:
                 image = Image.open(os.path.join(self.root, path[0], path[1], path[2], path[3], path)).convert('RGB')
             if self.transform is not None:
@@ -177,7 +181,7 @@ class Recipe1MDataset(data.Dataset):
     #     return caption
 
 
-def collate_fn(data):
+def collate_fn_quantity(data): ## quantity 데이터 있는 경우만 사용...
 
     # Sort a data list by caption length (descending order).
     # data.sort(key=lambda x: len(x[2]), reverse=True)
@@ -206,6 +210,23 @@ def collate_fn(data):
 
     return image_input, ingrs_gt, quantity_gt, img_id, path
 
+def collate_fn_valid_image(data):
+
+    data = [sample for sample in data if sample[0] is not None] ## image 가 None이 아닌 경우만 (jpeg, lmdb 둘 중 하나는 성공한 경우)
+
+    if not data:
+        return None
+    
+    image_input, ingrs_gt, quantity_gt, img_id, path = zip(*data)
+
+    # Merge images (from tuple of 3D tensor to 4D tensor).
+
+    image_input = torch.stack(image_input, 0)
+    ingrs_gt = torch.stack(ingrs_gt, 0)
+    quantity_gt = torch.stack(quantity_gt,0) ## Q) 이거 왜 하는거지ㅠ
+
+    return image_input, ingrs_gt, quantity_gt, img_id, path
+
 
 def get_loader(data_dir, aux_data_dir, split, maxseqlen,
                maxnuminstrs, maxnumlabels, maxnumims, transform, batch_size,
@@ -224,5 +245,5 @@ def get_loader(data_dir, aux_data_dir, split, maxseqlen,
 
     data_loader = torch.utils.data.DataLoader(dataset=dataset,
                                               batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
-                                              drop_last=drop_last, collate_fn=collate_fn, pin_memory=True)
+                                              drop_last=drop_last, pin_memory=True) # collate_fn=collate_fn_quantity - quantity 있는 데이터만 이용하고 싶을 때
     return data_loader, dataset

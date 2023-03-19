@@ -21,6 +21,7 @@ import random
 from tqdm import tqdm
 import argparse
 from utils.output_utils import get_ingrs
+import fasldifjoie ##
 # from temp import quantity_counter
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 map_loc = None if torch.cuda.is_available() else 'cpu'
@@ -32,7 +33,8 @@ class Quantity_MLP(nn.Module):
         self.global_pool = nn.AdaptiveAvgPool1d(1)
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, output_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, output_size)
     
     def forward(self, x):
         x = self.global_pool(x)
@@ -41,6 +43,9 @@ class Quantity_MLP(nn.Module):
         x = self.fc1(x)
         x = self.relu(x)
         x = self.fc2(x)
+        x = self.relu(x)
+        x = self.fc3(x)
+        
         return x
 
 class Inverse_Quantity(nn.Module):
@@ -83,9 +88,56 @@ class Inverse_Quantity(nn.Module):
 
         return losses
     
+def make_dir(d):
+    if not os.path.exists(d):
+        os.makedirs(d)
+
+def set_lr(optimizer, decay_factor):
+    for group in optimizer.param_groups:
+        group['lr'] = group['lr']*decay_factor
+
+def save_model(model, optimizer, checkpoints_dir, suff=''):
+    if torch.cuda.device_count() > 1:
+        torch.save(model.module.state_dict(), os.path.join(
+            checkpoints_dir, 'model' + suff + '.ckpt'))
+
+    else:
+        torch.save(model.state_dict(), os.path.join(
+            checkpoints_dir, 'model' + suff + '.ckpt'))
+
+    torch.save(optimizer.state_dict(), os.path.join(
+        checkpoints_dir, 'optim' + suff + '.ckpt'))
 
 
 def main(args):
+    #######
+    save_dir = '../results'
+    project_name = 'quantity_extended'
+    model_name = ''
+    #######
+
+
+    # Create model directory & other aux folders for logging
+    where_to_save = os.path.join(save_dir, project_name, model_name) ## results/project_name/model_name
+    checkpoints_dir = os.path.join(where_to_save, 'checkpoints')
+    logs_dir = os.path.join(where_to_save, 'logs')
+    tb_logs = os.path.join(save_dir, project_name, 'tb_logs', model_name)
+    make_dir(where_to_save)
+    make_dir(logs_dir)
+    make_dir(checkpoints_dir)
+    make_dir(tb_logs)
+    if args.tensorboard:
+        logger = Visualizer(tb_logs, name='visual_results')
+    
+    if not args.log_term:
+        print ("Training logs will be saved to:", os.path.join(logs_dir, 'train.log'))
+        sys.stdout = open(os.path.join(logs_dir, 'train.log'), 'w')
+        sys.stderr = open(os.path.join(logs_dir, 'train.err'), 'w')
+    
+    pickle.dump(args, open(os.path.join(checkpoints_dir, 'args.pkl'), 'wb'))
+
+    # patience init
+    curr_pat = 0
 
 
     data_loaders = {}
@@ -130,8 +182,8 @@ def main(args):
     quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
     inverse_model = get_model(args, ingr_vocab_size, 23231) ## TODO hardcode here
     keep_cnn_gradients = False
-    inverse_model_path = os.path.join('/home/donghee/inversecooking/data', 'modelbest.ckpt')
-    inverse_model.load_state_dict(torch.load(inverse_model_path, map_location=map_loc))
+    # inverse_model_path = os.path.join('/home/donghee/inversecooking/data', 'modelbest.ckpt')
+    # inverse_model.load_state_dict(torch.load(inverse_model_path, map_location=map_loc))
 
     for p in inverse_model.parameters():
         p.requires_grad = False
@@ -143,14 +195,11 @@ def main(args):
     #     p.requires_grad = True
     
     model = Inverse_Quantity(inverse_model, quantity_model)
-    model = model.to(device)
-
     decay_factor = 1.0
 
     # params = list(inverse_model.ingredient_decoder.parameters())
-    params = list(quantity_model.parameters())
-    params_linear = list(inverse_model.image_encoder.linear.parameters())
-
+    params = list(model.quantity_model.parameters())
+    params_linear = list(model.inverse_model.image_encoder.linear.parameters())
     # params += params_quantity
     params += params_linear
 
@@ -160,17 +209,50 @@ def main(args):
 
     optimizer = torch.optim.Adam(params, lr=args.learning_rate)
 
+    ## TODO - resume
+
+    if device != 'cpu' and torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
+    
+    model = model.to(device)
+    cudnn.benchmark = True
+
+    if not hasattr(args, 'current_epoch'):
+        args.current_epoch = 0
+
     train_losses = []
     val_losses = []
     best_val = float('inf')
+    start = args.current_epoch
     if args.mode == 'train':
-        for epoch in tqdm(range(args.epochs)):
+        for epoch in tqdm(range(start, args.num_epochs)):
             print("======== EPOCH {} =========".format(epoch))
 
+            if args.tensorboard:
+                logger.reset()
+
+            if args.decay_lr:
+                frac = epoch // args.lr_decay_every
+                decay_factor = args.lr_decay_rate ** frac
+                new_lr = args.learning_rate*decay_factor
+                print ('Epoch %d. lr: %.5f'%(epoch, new_lr))
+                set_lr(optimizer, decay_factor)
+            
             train_loss = 0.0
             n_train = 0
-            for batch in data_loaders['train']:
+
+            total_loss_dict = {'quantity_loss': [], 'ingr_loss': [],
+                               'eos_loss': [], 'loss': [],
+                               'iou': [], 'perplexity': [], 'iou_sample': [],
+                               'f1': [],
+                               'card_penalty': []}
+
+            torch.cuda.synchronize()
+            start = time.time()
+
+            for i, batch in enumerate(data_loaders['train']):
                 model.train()
+                split = 'train'
 
                 if batch is None:
                     continue
@@ -180,13 +262,44 @@ def main(args):
 
                 losses = model.forward(img_inputs, ingr_gt, quantity_gt)
 
-                loss = losses['quantity_loss']
-                # loss = 1000.0*losses['ingr_loss'] + 1000.0*losses['quantity_loss'] + 1.0*losses['eos_loss'] + 1.0*losses['card_penalty']
+                # loss = losses['quantity_loss']
+                ## TODO - ingr / quantity loss scale..
+                loss = 1000.0*losses['ingr_loss'] + 1000.0*losses['quantity_loss'] + 1.0*losses['eos_loss'] + 1.0*losses['card_penalty']
 
-                optimizer.zero_grad()
+                model.zero_grad()
                 loss.backward()
                 optimizer.step()
                 train_loss += loss.item()
+
+                for key in losses.keys():
+                    total_loss_dict[key].append(losses[key])
+
+                # Print log info
+                if args.log_step != -1 and i % args.log_step == 0:
+                    elapsed_time = time.time()-start
+                    lossesstr = ""
+                    for k in total_loss_dict.keys():
+                        if len(total_loss_dict[k]) == 0:
+                            continue
+                        this_one = "%s: %.4f" % (k, np.mean(total_loss_dict[k][-args.log_step:]))
+                        lossesstr += this_one + ', '
+                    # this only displays nll loss on captions, the rest of losses will be in tensorboard logs
+                    strtoprint = 'Split: %s, Epoch [%d/%d], Step [%d/%d], Losses: %sTime: %.4f' % (split, epoch,
+                                                                                                   args.num_epochs, i,
+                                                                                                   len(data_loaders[split]),
+                                                                                                   lossesstr,
+                                                                                                   elapsed_time)
+                    print(strtoprint)
+
+                    if args.tensorboard:
+                        # logger.histo_summary(model=model, step=total_step * epoch + i)
+                        logger.scalar_summary(mode=split+'_iter', epoch=len(data_loaders[split])*epoch+i,
+                                              **{k: np.mean(v[-args.log_step:]) for k, v in total_loss_dict.items() if v})
+
+                    torch.cuda.synchronize()
+                    start = time.time()
+                del loss, losses, captions, img_inputs
+                    
             
             train_loss = train_loss / len(data_loaders['train'])
             train_losses.append(train_loss)
@@ -194,10 +307,27 @@ def main(args):
                 print("# training data points: ", n_train)
             print("Losses : ",train_losses)
 
+            if args.tensorboard:
+                # 1. Log scalar values (scalar summary)
+                logger.scalar_summary(mode=split,
+                                      epoch=epoch,
+                                      **{k: np.mean(v) for k, v in total_loss_dict.items() if v})
+
             
             n_val = 0
+            total_loss_dict = {'quantity_loss': [], 'ingr_loss': [],
+                               'eos_loss': [], 'loss': [],
+                               'iou': [], 'perplexity': [], 'iou_sample': [],
+                               'f1': [],
+                               'card_penalty': []}
+            
+            torch.cuda.synchronize()
+            start = time.time()
+
             if (epoch+1)%args.val_freq == 0 or epoch == 0:
                 model.eval()
+                split = 'val'
+
                 with torch.no_grad():
                     val_loss = 0.0
                     for batch in data_loaders['val']:
@@ -214,8 +344,36 @@ def main(args):
 
                         val_loss += loss.item()
                         
-                        # if random.random() < 0.1: ## of np.random.uniform()
-                        #     check_example(img_ids[0], ingr_gt[0], quantity_gt[0], pred_quantity[0])
+                        if random.random() < 0.1: ## of np.random.uniform()
+                            check_example(img_ids[0], ingr_gt[0], quantity_gt[0], pred_quantity[0])
+                        for key in losses.keys():
+                            total_loss_dict[key].append(losses[key])
+
+                        # Print log info
+                        if args.log_step != -1 and i % args.log_step == 0:
+                            elapsed_time = time.time()-start
+                            lossesstr = ""
+                            for k in total_loss_dict.keys():
+                                if len(total_loss_dict[k]) == 0:
+                                    continue
+                                this_one = "%s: %.4f" % (k, np.mean(total_loss_dict[k][-args.log_step:]))
+                                lossesstr += this_one + ', '
+                            # this only displays nll loss on captions, the rest of losses will be in tensorboard logs
+                            strtoprint = 'Split: %s, Epoch [%d/%d], Step [%d/%d], Losses: %sTime: %.4f' % (split, epoch,
+                                                                                                        args.num_epochs, i,
+                                                                                                        len(data_loaders[split]),
+                                                                                                        lossesstr,
+                                                                                                        elapsed_time)
+                            print(strtoprint)
+
+                            if args.tensorboard:
+                                # logger.histo_summary(model=model, step=total_step * epoch + i)
+                                logger.scalar_summary(mode=split+'_iter', epoch=len(data_loaders[split])*epoch+i,
+                                                    **{k: np.mean(v[-args.log_step:]) for k, v in total_loss_dict.items() if v})
+
+                            torch.cuda.synchronize()
+                            start = time.time()
+                        del loss, losses, captions, img_inputs
 
                 if epoch == 0:
                     print("# val data points: ", n_val)
@@ -229,16 +387,28 @@ def main(args):
                 print("* best val_loss: ", best_val)
 
                 if is_best:
-                    filename = os.path.join('/home/donghee/inversecooking/results','model3_epoch%03d_tloss-%.3f.pth.tar' % (epoch, best_val))
-                    torch.save({
-                    'epoch': epoch +1,
-                    'quantity_model_state_dict': quantity_model.state_dict(),
-                    'quantity_optimizer_state_dict': optimizer.state_dict(),
-                    'best_val_loss': best_val,
-                    'curr_val_loss': val_loss,
-                    'lr': optimizer.param_groups[0]['lr']
-                    }, filename)
-                    print("Save model")
+                    save_model(model, optimizer, checkpoints_dir, suff='best')
+                    pickle.dump(args, open(os.path.join(checkpoints_dir, 'args.pkl'), 'wb'))
+                    curr_pat = 0
+                    print('Saved checkpoint.')
+                    # filename = os.path.join('/home/donghee/inversecooking/results','model3_epoch%03d_tloss-%.3f.pth.tar' % (epoch, best_val))
+                    # torch.save({
+                    # 'epoch': epoch +1,
+                    # 'quantity_model_state_dict': quantity_model.state_dict(),
+                    # 'quantity_optimizer_state_dict': optimizer.state_dict(),
+                    # 'best_val_loss': best_val,
+                    # 'curr_val_loss': val_loss,
+                    # 'lr': optimizer.param_groups[0]['lr']
+                    # }, filename)
+                    # print("Save model")
+                else:
+                    curr_pat += 1
+                
+                if curr_pat > args.patience:
+                    break
+
+        if args.tensorboard:
+            logger.close()   
 
     else:
 
@@ -299,14 +469,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--recipe1m_dir', type=str, default='/home/donghee/inversecooking/recipe1M',
                         help='path to the recipe1m dataset')
-    parser.add_argument('--save_dir', type=str, default='/home/donghee/inversecooking/only_quantity',
+    parser.add_argument('--save_dir', type=str, default='/home/donghee/inversecooking/results',
                         help='path where the checkpoints will be saved')
-    parser.add_argument('--epochs', type=int, default=50,
-                        help='epochs')
+    parser.add_argument('--num_epochs', type=int, default=400,
+                        help='maximum number of epochs')
     parser.add_argument('--val_freq', type=int, default=5,
                         help='frequency to validate')
-    parser.add_argument('--mode', type=str, default='test',
+    parser.add_argument('--mode', type=str, default='train',
                         help='train or test')
+    
+
     parser.add_argument('--crop_size', type=int, default=224, help='size for randomly or center cropping images')
 
     parser.add_argument('--image_size', type=int, default=256, help='size to rescale images')
@@ -317,7 +489,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_eval', type=int, default=4096,
                         help='number of validation samples to evaluate during training')
     
-    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--maxseqlen', type=int, default=15,
                         help='maximum length of each instruction')
 
@@ -330,7 +502,7 @@ if __name__ == "__main__":
     parser.add_argument('--maxnumlabels', type=int, default=20,
                         help='maximum number of ingredients per sample')
     parser.add_argument('--num_workers', type=int, default=8)
-    parser.add_argument('--learning_rate', type=float, default=0.001,
+    parser.add_argument('--learning_rate', type=float, default=0.0001,
                     help='base learning rate')
     
 
