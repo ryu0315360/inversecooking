@@ -6,7 +6,7 @@ import numpy as np
 import os
 import random
 import pickle
-from quantity_data_loader import get_loader
+from quantity_data_loader import get_loader, Recipe1MDataset
 from build_vocab import Vocabulary
 from model import get_model
 from torchvision import transforms
@@ -21,7 +21,11 @@ import random
 from tqdm import tqdm
 import argparse
 from utils.output_utils import get_ingrs
-import fasldifjoie ##
+import logging
+import sys
+sys.path.append('/home/donghee/CLIP')
+import clip
+
 # from temp import quantity_counter
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 map_loc = None if torch.cuda.is_available() else 'cpu'
@@ -57,7 +61,10 @@ class Inverse_Quantity(nn.Module):
         self.quantity_criterion = nn.MSELoss(reduce = False)
         self.quantity_criterion = self.quantity_criterion.to(device)
 
-    def forward(self, img_inputs, ingr_gt, quantity_gt, test=False):
+    def forward(self, img_inputs, ingr_gt, quantity_gt, sample = False, val=False):
+
+        if sample:
+            return self.inverse_model.sample(img_inputs, greedy=True) ## return outputs
 
         img_inputs = img_inputs.to(device)
         ingr_gt = ingr_gt.to(device)
@@ -83,7 +90,7 @@ class Inverse_Quantity(nn.Module):
         losses['eos_loss'] = losses['eos_loss'].mean()
         losses['card_penalty'] = losses['card_penalty'].mean()
 
-        if test == True:
+        if val == True:
             return losses, pred_quantity
 
         return losses
@@ -111,11 +118,16 @@ def save_model(model, optimizer, checkpoints_dir, suff=''):
 
 def main(args):
     #######
-    save_dir = '../results'
-    project_name = 'quantity_extended'
-    model_name = ''
+    mode = 'train'
+    save_dir = '/home/donghee/inversecooking/results'
+    project_name = 'train_ingr_only'
+    model_name = 'from_best_cnn'
+    train_ingr_only = True
+    resume = True
+    resume_model_path = '/home/donghee/inversecooking/data/modelbest.ckpt'
+    cnn_train = True
+    # resume_optim_path = '/home/donghee/inversecooking/results/train_ingr_only/from_best/checkpoints/optim.ckpt'
     #######
-
 
     # Create model directory & other aux folders for logging
     where_to_save = os.path.join(save_dir, project_name, model_name) ## results/project_name/model_name
@@ -126,6 +138,9 @@ def main(args):
     make_dir(logs_dir)
     make_dir(checkpoints_dir)
     make_dir(tb_logs)
+
+    logging.basicConfig(filename = os.path.join(where_to_save, 'my_log.log'), level = logging.INFO)
+
     if args.tensorboard:
         logger = Visualizer(tb_logs, name='visual_results')
     
@@ -163,6 +178,8 @@ def main(args):
 
         transform = transforms.Compose(transforms_list)
         max_num_samples = max(args.max_eval, args.batch_size) if split == 'val' else -1
+        if mode == 'clip_test':
+            max_num_samples = -1
         data_loaders[split], datasets[split] = get_loader(data_dir, args.aux_data_dir, split,
                                                           args.maxseqlen,
                                                           args.maxnuminstrs,
@@ -174,42 +191,91 @@ def main(args):
                                                           max_num_samples=max_num_samples,
                                                           use_lmdb=True,
                                                           suff='')
+    
+    data_loaders['val_origin'], datasets['val_origin'] = get_loader(data_dir, args.aux_data_dir, 'val_origin',
+                                                          args.maxseqlen,
+                                                          args.maxnuminstrs,
+                                                          args.maxnumlabels,
+                                                          args.maxnumims,
+                                                          transform, args.batch_size,
+                                                          shuffle='val_origin' == 'train', num_workers=args.num_workers,
+                                                          drop_last=True,
+                                                          max_num_samples=max_num_samples,
+                                                          use_lmdb=True,
+                                                          suff='')
 
     # quantity_counter(data_loaders)
     ingr_vocab_size = datasets[split].get_ingrs_vocab_size()
     instrs_vocab_size = datasets[split].get_instrs_vocab_size()
 
-    quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
-    inverse_model = get_model(args, ingr_vocab_size, 23231) ## TODO hardcode here
-    keep_cnn_gradients = False
-    # inverse_model_path = os.path.join('/home/donghee/inversecooking/data', 'modelbest.ckpt')
-    # inverse_model.load_state_dict(torch.load(inverse_model_path, map_location=map_loc))
+    idx2ingr = datasets[split].ingrs_vocab.idx2word
 
-    for p in inverse_model.parameters():
-        p.requires_grad = False
+    if train_ingr_only:
+        model = get_model(args, ingr_vocab_size, 23231)
+        keep_cnn_gradients = False
 
-    for p in inverse_model.image_encoder.linear.parameters():
-        p.requires_grad = True
-    
-    # for p in inverse_model.ingredient_decoder.parameters():
-    #     p.requires_grad = True
-    
-    model = Inverse_Quantity(inverse_model, quantity_model)
-    decay_factor = 1.0
+        if resume:
+            model.load_state_dict(torch.load(resume_model_path, map_location=map_loc))
+        
+        params = list(model.ingredient_decoder.parameters())
+        print ("ingredient decoder params:", sum(p.numel() for p in params if p.requires_grad))
+        params_linear = list(model.image_encoder.linear.parameters())
+        params += params_linear
+        print ("image linear params:", sum(p.numel() for p in params_linear if p.requires_grad))
+        params_cnn = list(model.image_encoder.resnet.parameters())
+        print ("CNN params:", sum(p.numel() for p in params_cnn if p.requires_grad))
 
-    # params = list(inverse_model.ingredient_decoder.parameters())
-    params = list(model.quantity_model.parameters())
-    params_linear = list(model.inverse_model.image_encoder.linear.parameters())
-    # params += params_quantity
-    params += params_linear
+        if cnn_train:
+            optimizer = torch.optim.Adam([{'params': params}, {'params': params_cnn,
+                                                            'lr': args.learning_rate*args.scale_learning_rate_cnn}],
+                                        lr=args.learning_rate, weight_decay=args.weight_decay)
+            keep_cnn_gradients = True
+            print ("Fine tuning resnet")
+        else:
+            optimizer = torch.optim.Adam(params, lr=args.learning_rate)
+            print("Train only linear layer")
+        
+        ## TODO
+        ## from_best 이면 lr 좀 더 작게 해야하지 않을까..
 
-    # print ("ingredient decoder params:", sum(p.numel() for p in params if p.requires_grad))
-    print ("quantity decoder params:", sum(p.numel() for p in params if p.requires_grad))
-    print ("image linear params:", sum(p.numel() for p in params_linear if p.requires_grad))
+    else:
+        quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
+        inverse_model = get_model(args, ingr_vocab_size, 23231) ## TODO hardcode here
+        keep_cnn_gradients = False
 
-    optimizer = torch.optim.Adam(params, lr=args.learning_rate)
+        if resume:
+            inverse_model.load_state_dict(torch.load(resume_model_path, map_location=map_loc))
 
-    ## TODO - resume
+        for p in inverse_model.parameters():
+            p.requires_grad = False
+
+        for p in inverse_model.image_encoder.linear.parameters():
+            p.requires_grad = True
+        
+        # for p in inverse_model.ingredient_decoder.parameters():
+        #     p.requires_grad = True
+        
+        model = Inverse_Quantity(inverse_model, quantity_model)
+        decay_factor = 1.0
+
+        # params = list(inverse_model.ingredient_decoder.parameters())
+        params = list(model.quantity_model.parameters())
+        params_linear = list(model.inverse_model.image_encoder.linear.parameters())
+        # params += params_quantity
+        params += params_linear
+
+        print ("quantity decoder params:", sum(p.numel() for p in params if p.requires_grad))
+        print ("image linear params:", sum(p.numel() for p in params_linear if p.requires_grad))
+
+        optimizer = torch.optim.Adam(params, lr=args.learning_rate)
+
+    # if resume:
+    #     optimizer.load_state_dict(torch.load(resume_optim_path, map_location=map_loc))
+    #     for state in optimizer.state.values():
+    #         for k, v in state.items():
+    #             if isinstance(v, torch.Tensor):
+    #                 state[k] = v.to(device)
+    #     model.load_state_dict(torch.load(resume_model_path, map_location=map_loc))
 
     if device != 'cpu' and torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
@@ -223,19 +289,21 @@ def main(args):
     train_losses = []
     val_losses = []
     best_val = float('inf')
+    es_best = best_val ##
     start = args.current_epoch
-    if args.mode == 'train':
+    if mode == 'train':
         for epoch in tqdm(range(start, args.num_epochs)):
             print("======== EPOCH {} =========".format(epoch))
+            logging.info(f'====== EPOCH : {epoch} =======')
 
             if args.tensorboard:
                 logger.reset()
 
             if args.decay_lr:
                 frac = epoch // args.lr_decay_every
-                decay_factor = args.lr_decay_rate ** frac
+                decay_factor = args.lr_decay_rate ** frac ## 0.99
                 new_lr = args.learning_rate*decay_factor
-                print ('Epoch %d. lr: %.5f'%(epoch, new_lr))
+                print ('Epoch %d. lr: %.5f'%(epoch, new_lr)) ## no decay..
                 set_lr(optimizer, decay_factor)
             
             train_loss = 0.0
@@ -258,13 +326,50 @@ def main(args):
                     continue
                 
                 n_train += batch[0].shape[0]
-                img_inputs, ingr_gt, quantity_gt, img_ids, paths = batch
-
-                losses = model.forward(img_inputs, ingr_gt, quantity_gt)
+                img_inputs, ingr_gt, quantity_gt, recipe_ids, img_ids = batch
+                img_inputs = img_inputs.to(device)
+                ingr_gt = ingr_gt.to(device)
+                quantity_gt = quantity_gt.to(device)
+                
+                if not train_ingr_only: ## quantity도 train
+                    losses = model.forward(img_inputs, ingr_gt, quantity_gt)
+                else:
+                    captions = None
+                    losses = model.forward(img_inputs, captions, ingr_gt)
 
                 # loss = losses['quantity_loss']
-                ## TODO - ingr / quantity loss scale..
-                loss = 1000.0*losses['ingr_loss'] + 1000.0*losses['quantity_loss'] + 1.0*losses['eos_loss'] + 1.0*losses['card_penalty']
+                ## TODO - ingr_true / quantity loss scale..
+
+                ## 4GPUs
+                ingr_loss = losses['ingr_loss']
+                ingr_loss = ingr_loss.mean()
+                losses['ingr_loss'] = ingr_loss.item()
+
+                eos_loss = losses['eos_loss']
+                eos_loss = eos_loss.mean()
+                losses['eos_loss'] = eos_loss.item()
+
+                iou_seq = losses['iou']
+                iou_seq = iou_seq.mean()
+                losses['iou'] = iou_seq.item()
+
+                card_penalty = losses['card_penalty'].mean()
+                losses['card_penalty'] = card_penalty.item()
+
+                if not train_ingr_only: ## quantity also train
+                    quantity_loss = losses['quantity_loss']
+                    quantity_loss = quantity_loss.mean()
+                    losses['quantity_loss'] = quantity_loss.item()
+                    
+                    loss = 1000.0*ingr_loss + 0.01*quantity_loss + 1.0*eos_loss + 1.0*card_penalty
+                    logging.info(f'** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, quantity_loss ={quantity_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}')
+                
+                else: ## only ingr_true train
+                    quantity_loss = 0.0
+                    loss = 1000.0*ingr_loss + 1.0*eos_loss + 1.0*card_penalty
+                    logging.info(f'** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}')
+
+                losses['loss'] = loss.item()
 
                 model.zero_grad()
                 loss.backward()
@@ -281,7 +386,7 @@ def main(args):
                     for k in total_loss_dict.keys():
                         if len(total_loss_dict[k]) == 0:
                             continue
-                        this_one = "%s: %.4f" % (k, np.mean(total_loss_dict[k][-args.log_step:]))
+                        this_one = "%s: %.8f" % (k, np.mean(total_loss_dict[k][-args.log_step:]))
                         lossesstr += this_one + ', '
                     # this only displays nll loss on captions, the rest of losses will be in tensorboard logs
                     strtoprint = 'Split: %s, Epoch [%d/%d], Step [%d/%d], Losses: %sTime: %.4f' % (split, epoch,
@@ -298,7 +403,7 @@ def main(args):
 
                     torch.cuda.synchronize()
                     start = time.time()
-                del loss, losses, captions, img_inputs
+                del loss, losses, img_inputs
                     
             
             train_loss = train_loss / len(data_loaders['train'])
@@ -321,94 +426,203 @@ def main(args):
                                'f1': [],
                                'card_penalty': []}
             
+            error_types = {'tp_i': 0, 'fp_i': 0, 'fn_i': 0, 'tn_i': 0,
+                           'tp_all': 0, 'fp_all': 0, 'fn_all': 0}
+            
             torch.cuda.synchronize()
             start = time.time()
 
             if (epoch+1)%args.val_freq == 0 or epoch == 0:
+                logging.info(f'===== VAL (EPOCH: {epoch}) =====')
                 model.eval()
-                split = 'val'
+                # split = 'val'
 
                 with torch.no_grad():
                     val_loss = 0.0
-                    for batch in data_loaders['val']:
-                        
-                        if batch is None:
-                            continue
-                        
-                        n_val += batch[0].shape[0]
-                        img_inputs, ingr_gt, quantity_gt, img_ids, paths = batch
+                    splits = ['val_origin', 'val']
+                    for split in splits:
+                        for i, batch in enumerate(data_loaders[split]):
+                            
+                            if batch is None:
+                                continue
+                            
+                            n_val += batch[0].shape[0]
+                            img_inputs, ingr_gt, quantity_gt, recipe_ids, img_ids = batch
+                            img_inputs = img_inputs.to(device)
+                            ingr_gt = ingr_gt.to(device)
+                            quantity_gt = quantity_gt.to(device)
 
-                        losses = model.forward(img_inputs, ingr_gt, quantity_gt)
-                        loss = losses['quantity_loss']
-                        # loss = 1000.0*losses['ingr_loss'] + 1000.0*losses['quantity_loss'] + 1.0*losses['eos_loss'] + 1.0*losses['card_penalty']
+                            if not train_ingr_only: ## quantity도 train
+                                losses, pred_quantity = model.forward(img_inputs, ingr_gt, quantity_gt, val = True)
+                            else:
+                                captions = None
+                                losses = model.forward(img_inputs, captions, ingr_gt)
+                            
+                            ## 4GPUs
+                            ingr_loss = losses['ingr_loss']
+                            ingr_loss = ingr_loss.mean()
+                            losses['ingr_loss'] = ingr_loss.item()
 
-                        val_loss += loss.item()
-                        
-                        if random.random() < 0.1: ## of np.random.uniform()
-                            check_example(img_ids[0], ingr_gt[0], quantity_gt[0], pred_quantity[0])
-                        for key in losses.keys():
-                            total_loss_dict[key].append(losses[key])
+                            eos_loss = losses['eos_loss']
+                            eos_loss = eos_loss.mean()
+                            losses['eos_loss'] = eos_loss.item()
 
-                        # Print log info
-                        if args.log_step != -1 and i % args.log_step == 0:
-                            elapsed_time = time.time()-start
-                            lossesstr = ""
-                            for k in total_loss_dict.keys():
-                                if len(total_loss_dict[k]) == 0:
-                                    continue
-                                this_one = "%s: %.4f" % (k, np.mean(total_loss_dict[k][-args.log_step:]))
-                                lossesstr += this_one + ', '
-                            # this only displays nll loss on captions, the rest of losses will be in tensorboard logs
-                            strtoprint = 'Split: %s, Epoch [%d/%d], Step [%d/%d], Losses: %sTime: %.4f' % (split, epoch,
-                                                                                                        args.num_epochs, i,
-                                                                                                        len(data_loaders[split]),
-                                                                                                        lossesstr,
-                                                                                                        elapsed_time)
-                            print(strtoprint)
+                            iou_seq = losses['iou']
+                            iou_seq = iou_seq.mean()
+                            losses['iou'] = iou_seq.item()
 
-                            if args.tensorboard:
-                                # logger.histo_summary(model=model, step=total_step * epoch + i)
-                                logger.scalar_summary(mode=split+'_iter', epoch=len(data_loaders[split])*epoch+i,
-                                                    **{k: np.mean(v[-args.log_step:]) for k, v in total_loss_dict.items() if v})
+                            card_penalty = losses['card_penalty'].mean()
+                            losses['card_penalty'] = card_penalty.item()
 
-                            torch.cuda.synchronize()
-                            start = time.time()
-                        del loss, losses, captions, img_inputs
+                            if not train_ingr_only: ## quantity also train
+                                quantity_loss = losses['quantity_loss']
+                                quantity_loss = quantity_loss.mean()
+                                losses['quantity_loss'] = quantity_loss.item()
+                                
+                                loss = 1000.0*ingr_loss + 0.01*quantity_loss + 1.0*eos_loss + 1.0*card_penalty
+                                logging.info(f'** {split}- total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, quantity_loss ={quantity_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}')
+                            
+                            else: ## only ingr_true train
+                                quantity_loss = 0.0
+                                loss = 1000.0*ingr_loss + 1.0*eos_loss + 1.0*card_penalty
+                                logging.info(f'** {split}- total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}')
 
-                if epoch == 0:
-                    print("# val data points: ", n_val)
-                val_loss = val_loss / len(data_loaders['val'])
-                val_losses.append(val_loss)
-                print("Val losses: ", val_losses)
+                            losses['loss'] = loss.item()
 
-                is_best = val_loss < best_val
-                best_val = min(val_loss, best_val)
-                print("* current val loss: ", val_loss)
-                print("* best val_loss: ", best_val)
+                            val_loss += loss.item()
 
-                if is_best:
+                            ## sample
+                            if not train_ingr_only: ## quantity also train
+                                outputs = model.forward(img_inputs, ingr_gt, quantity_gt, sample = True)
+                            else: ## only ingr
+                                outputs = model.forward(img_inputs, captions, ingr_gt, sample = True)
+
+                            ingr_ids_greedy = outputs['ingr_ids']
+
+                            mask = mask_from_eos(ingr_ids_greedy, eos_value=0, mult_before=False)
+                            ingr_ids_greedy[mask == 0] = ingr_vocab_size-1
+                            pred_one_hot = label2onehot(ingr_ids_greedy, ingr_vocab_size-1)
+                            target_one_hot = label2onehot(ingr_gt, ingr_vocab_size-1)
+                            iou_sample = softIoU(pred_one_hot, target_one_hot)
+                            iou_sample = iou_sample.sum() / (torch.nonzero(iou_sample.data).size(0) + 1e-6)
+                            losses['iou_sample'] = iou_sample.item()
+
+                            update_error_types(error_types, pred_one_hot, target_one_hot)
+
+                            pred_ingrs = ingr_ids_greedy
+
+                            del outputs, pred_one_hot, target_one_hot, iou_sample
+
+                            
+                            if random.random() < 0.05: ## of np.random.uniform()
+                                if not train_ingr_only: ## quantity also
+                                    check_example(logging, idx2ingr, ingr_gt[0], quantity_gt[0], pred_quantity[0], recipe_ids[0], pred_ingrs[0])
+                                else: ## only ingr
+                                    check_example(logging=logging, idx2ingr=idx2ingr, ingr_gt=ingr_gt[0], quantity_gt = None, pred_quantity = None, img_id = recipe_ids[0], pred_ingr = pred_ingrs[0])
+                            for key in losses.keys():
+                                total_loss_dict[key].append(losses[key])
+
+                            # Print log info
+                            if args.log_step != -1 and i % args.log_step == 0:
+                                elapsed_time = time.time()-start
+                                lossesstr = ""
+                                for k in total_loss_dict.keys():
+                                    if len(total_loss_dict[k]) == 0:
+                                        continue
+                                    this_one = "%s: %.8f" % (k, np.mean(total_loss_dict[k][-args.log_step:]))
+                                    lossesstr += this_one + ', '
+                                # this only displays nll loss on captions, the rest of losses will be in tensorboard logs
+                                strtoprint = 'Split: %s, Epoch [%d/%d], Step [%d/%d], Losses: %sTime: %.4f, iou: %.4f' % (split, epoch,
+                                                                                                            args.num_epochs, i,
+                                                                                                            len(data_loaders[split]),
+                                                                                                            lossesstr,
+                                                                                                            elapsed_time, losses['iou'])
+                                print(strtoprint)
+
+                                if args.tensorboard:
+                                    # logger.histo_summary(model=model, step=total_step * epoch + i)
+                                    logger.scalar_summary(mode=split+'_iter', epoch=len(data_loaders[split])*epoch+i,
+                                                        **{k: np.mean(v[-args.log_step:]) for k, v in total_loss_dict.items() if v})
+
+                                torch.cuda.synchronize()
+                                start = time.time()
+                            del loss, losses, img_inputs
+
+                            ret_metrics = {'accuracy': [], 'f1': [], 'jaccard': [], 'f1_ingredients': [], 'dice': []}
+                            compute_metrics(ret_metrics, error_types,
+                                            ['accuracy', 'f1', 'jaccard', 'f1_ingredients', 'dice'], eps=1e-10,
+                                            weights=None)
+                            total_loss_dict['f1'] = ret_metrics['f1']
+
+                        if epoch == 0:
+                            print("# val data points: ", n_val)
+                        val_loss = val_loss / len(data_loaders[split])
+                        val_losses.append(val_loss)
+                        print("Val losses: ", val_losses)
+
+                        is_best = val_loss < best_val
+                        best_val = min(val_loss, best_val)
+                        print("* current val loss: ", val_loss)
+                        print("* best val_loss: ", best_val)
+
+                es_value = np.mean(total_loss_dict[args.es_metric])
+
+                # save current model as well
+                save_model(model, optimizer, checkpoints_dir, suff='')
+                if (args.es_metric == 'loss' and es_value < es_best) or (args.es_metric == 'iou_sample' and es_value > es_best):
+                    es_best = es_value
                     save_model(model, optimizer, checkpoints_dir, suff='best')
                     pickle.dump(args, open(os.path.join(checkpoints_dir, 'args.pkl'), 'wb'))
                     curr_pat = 0
                     print('Saved checkpoint.')
-                    # filename = os.path.join('/home/donghee/inversecooking/results','model3_epoch%03d_tloss-%.3f.pth.tar' % (epoch, best_val))
-                    # torch.save({
-                    # 'epoch': epoch +1,
-                    # 'quantity_model_state_dict': quantity_model.state_dict(),
-                    # 'quantity_optimizer_state_dict': optimizer.state_dict(),
-                    # 'best_val_loss': best_val,
-                    # 'curr_val_loss': val_loss,
-                    # 'lr': optimizer.param_groups[0]['lr']
-                    # }, filename)
-                    # print("Save model")
                 else:
                     curr_pat += 1
-                
+
                 if curr_pat > args.patience:
                     break
 
         if args.tensorboard:
             logger.close()   
+
+    elif mode == 'clip_test':
+        model, preprocess = clip.load("ViT-B/32", device=device)
+        text = clip.tokenize(['A photo of a food', 'A photo of non-food']).to(device)
+
+        paths = []
+        threshold = 0.85
+        food_probs = []
+        with torch.no_grad():
+            for split in ['val', 'train', 'test']:
+                for i, batch in enumerate(tqdm(data_loaders[split])):
+                    img_inputs, ingr_gt, quantity_gt, recipe_ids, img_ids = batch
+                    img_inputs = img_inputs.to(device)
+                    text = text.to(device)
+                    logits_per_image, logits_per_text, image_embedding, text_embedding = model(img_inputs, text)
+                    probs = logits_per_image.softmax(dim=-1).cpu().numpy()
+
+                    # probs = np.array(probs)[:,0]
+                    # food_probs += list(probs)
+                    
+                    probs = np.array(probs)
+                    non_food_idx = probs[:,0] < threshold
+                    img_ids = np.array(img_ids)
+                    # non_food_ids += list(img_ids[non_food_idx])
+                    # probs_80s = np.logical_and(probs[:,0] < 0.85, probs[:,0] > 0.8)
+                    # img_80s = img_ids[probs_80s]
+                    for id in img_ids[non_food_idx]:
+                        path = os.path.join(split, id[0], id[1], id[2], id[3], id)
+                        paths.append(path)
+        
+        total_data = len(data_loaders['train']) + len(data_loaders['test']) + len(data_loaders['test'])
+        print("Total number of non_food: ", len(paths))
+        print("Total number of datapoints: ", total_data*args.batch_size)
+        # food_probs = np.array(food_probs)
+        # print("Mean of food probs: ", np.mean(food_probs))
+        # print("Std of food_probs: ", np.std(food_probs))
+
+        with open('/home/donghee/inversecooking/non_food.json', 'w') as f:
+            json.dump(paths, f, indent=4)
+             
 
     else:
 
@@ -425,40 +639,50 @@ def main(args):
                 continue
                         
             n_test += batch[0].shape[0]
-            img_inputs, ingr_gt, quantity_gt, img_ids, paths = batch
+            img_inputs, ingr_gt, quantity_gt, recipe_ids, img_ids = batch
 
-            losses, pred_quantity = model.forward(img_inputs, ingr_gt, quantity_gt, test = True)
+            losses, pred_quantity = model.forward(img_inputs, ingr_gt, quantity_gt, val = True)
             loss = losses['quantity_loss']
             # loss = 1000.0*losses['ingr_loss'] + 1000.0*losses['quantity_loss'] + 1.0*losses['eos_loss'] + 1.0*losses['card_penalty']
 
             test_losses.append(loss.item())
             if np.random.rand() < 0.2:
-                check_example(idx2ingr, ingr_gt[0], quantity_gt[0], pred_quantity[0], img_ids[0])
+                check_example(logging, idx2ingr, ingr_gt[0], quantity_gt[0], pred_quantity[0], recipe_ids[0])
         
         print("n_test: ", n_test)
         print("test loss: ", sum(test_losses)/len(test_losses))
 
 
-def check_example(idx2ingr, ingr_gt, quantity_gt, pred_quantity, img_id):
+def check_example(logging, idx2ingr, ingr_gt, quantity_gt, pred_quantity, img_id, pred_ingr):
 
     i = 0
-    ingr = []
+    ingr_true = []
     quantity_gt_short = []
     quantity_pred_short = []
     while ingr_gt[i] != 1487 and ingr_gt[i] != 0:
         idx = ingr_gt[i].item() ## 30
-        ingr.append(idx2ingr[idx][0]) ## elbow macaroni
-        quantity_gt_short.append(quantity_gt[idx].item()) ## 1.5
-        quantity_pred_short.append(pred_quantity[idx].item()) ## 1.76
+        ingr_true.append(idx2ingr[idx][0]) ## elbow macaroni
+        if quantity_gt is not None and pred_quantity is not None:
+            quantity_gt_short.append(quantity_gt[idx].item()) ## 1.5
+            quantity_pred_short.append(pred_quantity[idx].item()) ## 1.76
         i += 1
     
-    print("###################")
-    print("Image ID: ", img_id)
-    print("True ingredient: ", ingr)
-    print("True quantity: ", quantity_gt_short)
-    print("Predicted quantity: ", quantity_pred_short)
-    print("Predicted quantity (entire): ", pred_quantity.item())
-    print("###################")
+    ingr_pred = []
+    i = 0
+    while pred_ingr[i] != 1487 and pred_ingr[i] != 0:
+        idx = pred_ingr[i].item() ## 30
+        ingr_pred.append(idx2ingr[idx][0]) ## elbow macaroni
+        i += 1
+
+    logging.info("###################")
+    logging.info(f"Image ID: {img_id}")
+    logging.info(f"True ingredient: {ingr_true}")
+    logging.info(f"Predicted ingredient: {ingr_pred}")
+    if quantity_gt is not None and pred_quantity is not None:
+        logging.info(f"True quantity: {quantity_gt_short}")
+        logging.info(f"Predicted quantity: {quantity_pred_short}")
+        logging.info(f"Predicted quantity (entire): {pred_quantity.item()}")
+    logging.info("###################")
 
 
 
@@ -473,10 +697,10 @@ if __name__ == "__main__":
                         help='path where the checkpoints will be saved')
     parser.add_argument('--num_epochs', type=int, default=400,
                         help='maximum number of epochs')
-    parser.add_argument('--val_freq', type=int, default=5,
-                        help='frequency to validate')
-    parser.add_argument('--mode', type=str, default='train',
-                        help='train or test')
+    parser.add_argument('--val_freq', type=int, default=1,
+                        help='frequency to validate') ## 1로 하자!!
+    # parser.add_argument('--mode', type=str, default='clip_test',
+    #                     help='train or test')
     
 
     parser.add_argument('--crop_size', type=int, default=224, help='size for randomly or center cropping images')
@@ -489,7 +713,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_eval', type=int, default=4096,
                         help='number of validation samples to evaluate during training')
     
-    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--batch_size', type=int, default=150) ##
     parser.add_argument('--maxseqlen', type=int, default=15,
                         help='maximum length of each instruction')
 
@@ -502,8 +726,8 @@ if __name__ == "__main__":
     parser.add_argument('--maxnumlabels', type=int, default=20,
                         help='maximum number of ingredients per sample')
     parser.add_argument('--num_workers', type=int, default=8)
-    parser.add_argument('--learning_rate', type=float, default=0.0001,
-                    help='base learning rate')
+    parser.add_argument('--learning_rate', type=float, default= 1e-04,
+                    help='base learning rate') ## learning rate 0.0001 에서 바꿈
     
 
     parser.add_argument('--project_name', type=str, default='',
@@ -525,8 +749,8 @@ if __name__ == "__main__":
     parser.add_argument('--log_step', type=int , default=10, help='step size for printing log info')
 
 
-    parser.add_argument('--scale_learning_rate_cnn', type=float, default=0.01,
-                        help='lr multiplier for cnn weights')
+    parser.add_argument('--scale_learning_rate_cnn', type=float, default=1.0,
+                        help='lr multiplier for cnn weights') ## default=0.01이었는데 ingredient from scratch는 1.0
 
     parser.add_argument('--lr_decay_rate', type=float, default=0.99,
                         help='learning rate decay factor')
@@ -593,7 +817,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--ingrs_only', dest='ingrs_only', action='store_true',
                         help='train or evaluate the model only for ingredient prediction')
-    parser.set_defaults(ingrs_only=False)
+    parser.set_defaults(ingrs_only=True)
 
     parser.add_argument('--recipe_only', dest='recipe_only', action='store_true',
                         help='train or evaluate the model only for instruction generation')

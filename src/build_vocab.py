@@ -155,6 +155,23 @@ def build_vocab_recipe1m(args):
     layer1 = json.load(open(os.path.join(args.recipe1m_path, 'layer1.json'), 'r'))
     layer2 = json.load(open(os.path.join(args.recipe1m_path, 'layer2_1M_clean.json'), 'r'))
     layer_quantity = json.load(open('/home/donghee/inversecooking/recipe1M+/recipes_with_nutritional_info.json', 'r'))
+    non_foods = json.load(open('/home/donghee/inversecooking/non_food.json', 'r'))
+    layer2_origin = json.load(open(os.path.join(args.recipe1m_path, 'layer2.json'), 'r'))
+
+    origin_ids = []
+    for entry in layer2_origin:
+        ims = entry['images']
+        for im in ims:
+            origin_ids.append(im['id'])
+    
+    origin_ids = set(origin_ids) ## 887536
+    
+    non_food_ids = []
+    for non_food in non_foods:
+        non_food_ids.append(non_food.split('/')[-1])
+    non_food_ids = set(non_food_ids) ## 220117
+
+    non_food_ids = non_food_ids - origin_ids ## 138404
 
     id2im = {}
 
@@ -304,6 +321,7 @@ def build_vocab_recipe1m(args):
     ######
     # 2. Tokenize and build dataset based on vocabularies.
     ######
+    non_food_cnt = 0
     for i, entry in tqdm(enumerate(layer1)):
 
         # get all instructions for this recipe
@@ -318,6 +336,9 @@ def build_vocab_recipe1m(args):
 
             # copy image paths for this recipe
             for im in ims['images']:
+                if im['id'] in non_food_ids:
+                    non_food_cnt += 1
+                    continue
                 images_list.append(im['id'])
         
         if len(images_list) == 0:
@@ -407,6 +428,8 @@ def build_vocab_recipe1m(args):
                     'ingredients': ingrs_list, 'quantity': quantity_list, 'unit': unit_list, 'images': images_list, 'title': title}
         dataset[entry['partition']].append(newentry)
 
+    print("len of non food: ", len(non_food_ids))
+    print("skipped non food count: ", non_food_cnt)
     print('Dataset size:')
     for split in dataset.keys():
         print(split, ':', len(dataset[split]))
@@ -424,7 +447,7 @@ def main(args):
     #     pickle.dump(vocab_toks, f)
 
     for split in dataset.keys():
-        with open(os.path.join(args.save_path, args.suff+'clean_recipe1m_' + split + '.pkl'), 'wb') as f:
+        with open(os.path.join(args.save_path, args.suff+'food_recipe1m_' + split + '.pkl'), 'wb') as f:
             pickle.dump(dataset[split], f)
 
 
