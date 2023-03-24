@@ -23,6 +23,7 @@ dependencies:
   - entrypoints=0.4=py37h06a4308_0
   - flit-core=3.6.0=pyhd3eb1b0_0
   - freetype=2.12.1=h4a9f257_0
+  - ftfy=5.8=py_0
   - fuzzywuzzy=0.18.0=py37h06a4308_0
   - giflib=5.2.1=h5eee18b_1
   - idna=3.4=py37h06a4308_0
