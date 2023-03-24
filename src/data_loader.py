@@ -37,7 +37,7 @@ class Recipe1MDataset(data.Dataset):
                 continue ## image 있는 id만 append
             self.ids.append(i)
 
-        self.root = os.path.join(data_dir, 'images', split)
+        # self.root = os.path.join(data_dir, 'images', split)
         self.transform = transform
         self.max_num_labels = maxnumlabels
         self.maxseqlen = maxseqlen
@@ -119,9 +119,21 @@ class Recipe1MDataset(data.Dataset):
                         image = np.reshape(image, (256, 256, 3))
                     image = Image.fromarray(image.astype('uint8'), 'RGB')
                 except:
-                    print ("Image id not found in lmdb. Loading jpeg file...")
-                    image = Image.open(os.path.join(self.root, path[0], path[1],
-                                                    path[2], path[3], path)).convert('RGB')
+                    # print ("Image id not found in lmdb. Loading jpeg file...")
+                    # image = Image.open(os.path.join(self.root, path[0], path[1],
+                    #                                 path[2], path[3], path)).convert('RGB')
+                    image_input = None
+                    caption = []
+
+                    caption = self.caption_to_idxs(tokens, caption)
+                    caption.append(self.instrs_vocab('<end>'))
+
+                    caption = caption[0:self.maxseqlen]
+                    target = torch.Tensor(caption)
+
+                    return image_input, target, ingrs_gt, img_id, path, self.instrs_vocab('<pad>')
+                    ## 여기꼭 원래대로!! root도 다시 돌려놓고
+
             else:
                 image = Image.open(os.path.join(self.root, path[0], path[1], path[2], path[3], path)).convert('RGB')
             if self.transform is not None:
@@ -151,9 +163,10 @@ class Recipe1MDataset(data.Dataset):
 
 
 def collate_fn(data):
-
+    
     # Sort a data list by caption length (descending order).
     # data.sort(key=lambda x: len(x[2]), reverse=True)
+    data = [sample for sample in data if sample[0] is not None] ##
     image_input, captions, ingrs_gt, img_id, path, pad_value = zip(*data)
 
     # Merge images (from tuple of 3D tensor to 4D tensor).

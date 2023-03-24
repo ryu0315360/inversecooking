@@ -137,7 +137,7 @@ def get_parser():
 
     parser.add_argument('--log_term', dest='log_term', action='store_true',
                         help='if used, shows training log in stdout instead of saving it to a file.')
-    parser.set_defaults(log_term=True)
+    parser.set_defaults(log_term=False)
 
     parser.add_argument('--notensorboard', dest='tensorboard', action='store_false',
                         help='if used, tensorboard logs will not be saved')

@@ -19,15 +19,23 @@ class Recipe1MDataset(data.Dataset):
     def __init__(self, data_dir, aux_data_dir, split, maxseqlen, maxnuminstrs, maxnumlabels, maxnumims,
                  transform=None, max_num_samples=-1, use_lmdb=False, suff=''):
 
-        self.ingrs_vocab = pickle.load(open('/home/donghee/inversecooking/data/quantity_recipe1m_vocab_ingrs.pkl', 'rb'))
+        self.ingrs_vocab = pickle.load(open('/home/donghee/inversecooking/data/recipe1m_vocab_ingrs.pkl', 'rb'))
         self.instrs_vocab = pickle.load(open(os.path.join(aux_data_dir, suff + 'recipe1m_vocab_toks.pkl'), 'rb'))
-        self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/quantityOnly_recipe1m_'+split+'.pkl'), 'rb'))
+        if split == 'val_origin':
+            self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/recipe1m_'+'val'+'.pkl'), 'rb'))
+        else:
+            self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/food_recipe1m_'+split+'.pkl'), 'rb'))## food_recipe1m
         self.label2word = self.get_ingrs_vocab()
 
         self.use_lmdb = use_lmdb
         if use_lmdb:
-            self.image_file = lmdb.open(os.path.join(aux_data_dir, 'lmdb_' + split), max_readers=1, readonly=True,
+            if split == 'val_origin':
+                self.image_file = lmdb.open(os.path.join(aux_data_dir, 'lmdb_' + 'val'), max_readers=1, readonly=True,
                                         lock=False, readahead=False, meminit=False)
+            else:
+                self.image_file = lmdb.open(os.path.join(aux_data_dir, 'extended_lmdb_' + split), max_readers=1, readonly=True,
+                                        lock=False, readahead=False, meminit=False)
+                                    
 
         self.ids = []
         self.split = split
@@ -45,7 +53,7 @@ class Recipe1MDataset(data.Dataset):
         self.maxnumims = maxnumims
         if max_num_samples != -1:
             random.shuffle(self.ids)
-            self.ids = self.ids[:max_num_samples]
+            self.ids = self.ids[:max_num_samples] ## 4096만 가지고 val 하는 거!! 그래서 매 epoch 하는 거였어.. 대박..
 
     def get_instrs_vocab(self):
         return self.instrs_vocab
@@ -66,7 +74,7 @@ class Recipe1MDataset(data.Dataset):
         sample = self.dataset[self.ids[index]]
         img_id = sample['id']
         # captions = sample['tokenized']
-        paths = sample['images'][0:self.maxnumims]
+        paths = sample['images'][0:self.maxnumims] ## 이 path가 진짜 img_id네!
 
         idx = index
 
@@ -106,24 +114,30 @@ class Recipe1MDataset(data.Dataset):
         ingrs_gt = torch.from_numpy(ilabels_gt).long()
 
         ##### quantity part
-        quantity = sample['quantity']
-        unit = sample['unit']
-        quantity_gt = np.zeros(len(self.ingrs_vocab)-1) ## except <pad> ## 1487
-        unit_gt = np.zeros(len(self.ingrs_vocab)-1)
-        exist_quantity = False
+        try:
+            quantity = sample['quantity']
+            unit = sample['unit']
+            quantity_gt = np.zeros(len(self.ingrs_vocab)-1) ## except <pad> ## 1487
+            unit_gt = np.zeros(len(self.ingrs_vocab)-1)
+            exist_quantity = False
 
-        if len(quantity) != 0 and len(labels) == pos: ## if there's quantity data and all the ingredients are valid, unique
-            exist_quantity = True
-            i = 0
-            while ilabels_gt[i] != 0: ## until end
-                quantity_gt[int(ilabels_gt[i])] = quantity[i]
-                # unit_gt[int(ilabels_gt[i])] = unit[i] ## could not convert string to float
-                i += 1
-            # print("CAN utilize quantity")
-        elif len(quantity) != 0 and len(labels) != pos:
-            j=0
+            if len(quantity) != 0 and len(labels) == pos: ## if there's quantity data and all the ingredients are valid, unique
+                exist_quantity = True
+                i = 0
+                while ilabels_gt[i] != 0: ## until end
+                    quantity_gt[int(ilabels_gt[i])] = quantity[i]
+                    # unit_gt[int(ilabels_gt[i])] = unit[i] ## could not convert string to float
+                    i += 1
+                # print("CAN utilize quantity")
+            elif len(quantity) != 0 and len(labels) != pos:
+                j=0
 
-        quantity_gt = torch.from_numpy(quantity_gt).float()
+            quantity_gt = torch.from_numpy(quantity_gt).float()
+        
+        except: ## no quantity (val_origin)
+            quantity_gt = np.zeros(len(self.ingrs_vocab)-1)
+            quantity_gt = torch.from_numpy(quantity_gt).float()
+        
         ##### TODO unit 어떻게 return 할 건지..
                 
 
@@ -146,13 +160,12 @@ class Recipe1MDataset(data.Dataset):
                         image = np.reshape(image, (256, 256, 3)) ## TODO 여기서 shape 안 맞아
                     image = Image.fromarray(image.astype('uint8'), 'RGB')
                 except:
-                    print ("Image id not found in lmdb. Loading jpeg file...")
-                    image = Image.open(os.path.join(self.root, path[0], path[1],
-                                                        path[2], path[3], path)).convert('RGB')
-                    # except:
-                    #     image_input = None
-                    #     print("Fail to load image. not use this data.")
-                    #     return image_input, ingrs_gt, quantity_gt, img_id, path
+                    # print ("Image id not found in lmdb. Loading jpeg file...")
+                    # image = Image.open(os.path.join(self.root, path[0], path[1],
+                    #                                     path[2], path[3], path)).convert('RGB')
+                    image_input = None
+                    print("Fail to load image. not use this data.")
+                    return image_input, ingrs_gt, quantity_gt, img_id, path
             else:
                 image = Image.open(os.path.join(self.root, path[0], path[1], path[2], path[3], path)).convert('RGB')
             if self.transform is not None:
@@ -245,5 +258,5 @@ def get_loader(data_dir, aux_data_dir, split, maxseqlen,
 
     data_loader = torch.utils.data.DataLoader(dataset=dataset,
                                               batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
-                                              drop_last=drop_last, pin_memory=True) # collate_fn=collate_fn_quantity - quantity 있는 데이터만 이용하고 싶을 때
+                                              drop_last=drop_last, collate_fn=collate_fn_valid_image, pin_memory=True) # collate_fn=collate_fn_quantity - quantity 있는 데이터만 이용하고 싶을 때
     return data_loader, dataset
