@@ -76,14 +76,22 @@ def single_food_counter():
     print("# single ingredient with image samples: ", single_wimage)
 
 def count_layer2():
-    layer2 = json.load(open(os.path.join('/home/donghee/inversecooking/recipe1M', 'layer2_1M_clean.json'), 'r'))
+    layer2 = json.load(open(os.path.join('/home/donghee/inversecooking', 'layer2_download.json'), 'r'))
     
     img_cnt = 0
+    id_cnt = 0
+    id = []
     for entry in layer2:
+        id.append(entry['id'])
+        if len(entry['images']) != 0:
+            id_cnt += 1
         img_cnt += len(entry['images'])
     
     print(img_cnt)
+    print(id_cnt)
+    print(len(id))
+    print(len(set(id)))
 
 # single_food_counter()
-count_ids()
-# count_layer2()
+# count_ids()
+count_layer2()

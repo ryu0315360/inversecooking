@@ -23,8 +23,8 @@ import argparse
 from utils.output_utils import get_ingrs
 import logging
 import sys
-sys.path.append('/home/donghee/CLIP')
-import clip
+# sys.path.append('/home/donghee/CLIP')
+# import clip
 
 # from temp import quantity_counter
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -683,7 +683,6 @@ def check_example(logging, idx2ingr, ingr_gt, quantity_gt, pred_quantity, img_id
         logging.info(f"Predicted quantity: {quantity_pred_short}")
         logging.info(f"Predicted quantity (entire): {pred_quantity.item()}")
     logging.info("###################")
-
 
 
 
