@@ -24,13 +24,13 @@ class Recipe1M(datasets.ImageFolder):
         filename = os.path.basename(path)
         return image, filename
 
-def detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im2id, im2url, threshold, num, original_img_ids_len):
+def detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im2id, im2url, threshold, num):
 
-    with open('/home/donghee/inversecooking/layer2_download.json', 'r') as f:
-        new_layer = json.load(f)
+    with open('/home/donghee/inversecooking/id2probs.json', 'r') as f:
+        id2probs = json.load(f)
     # dir_path = os.path.join('/home/donghee/inversecooking/recipe1M+', i)
 
-    id2probs = {}## 'id': {'img_id': img_id, 'probs': probs}
+    # id2probs = {}## 'id': {'img_id': img_id, 'probs': probs}
     original_img_ids_len = len(img_ids)
     
     ## for batch in data_loader: batch_size 1024
@@ -71,37 +71,26 @@ def detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im
                 img_ids.remove(id2probs[id]['img_id'])
                 img_ids.add(img_id)
                 id2probs[id]['img_id'] = img_id
-                id2probs[id]['prob'] = prob
+                id2probs[id]['prob'] = prob          
+    
+    assert len(id2probs.keys()) == len(set(id2probs.keys())) ## ids 중복 없어야 함
+    intersection = layer2_ids & set(id2probs.keys())
+    assert len(intersection) == 0
+    assert len(ids) == len(img_ids)
 
-    # cnt = 0
-    # for root, dirs, files in os.walk(dir_path): # layer2 에 있는 아이디들 뺴고, 나머지 아이디들에 대해서 이미지 1개씩만 남겨두기
-    #     for img_id in files:
-    #         cnt += 1
-    #         id = im2id[img_id]
-    #         if id in layer2_ids:
-    #             continue
-    #         probs = img_prob(model, preprocess, text, os.path.join(root, img_id))
-    #         # url = im2url[img_id]
-    #         if id not in ids and prob > threshold: ## 첫 추가
+    print(f'** num: {num}, # detected images (total): {len(img_ids)-original_img_ids_len} ({cnt}), detected ids (original layer2 ids): {len(ids)}({len(layer2_ids)})')
 
-    #             id2probs[id] = {
-    #                 'img_id': img_id,
-    #                 'prob': prob
-    #             }
+    with open('/home/donghee/inversecooking/id2probs.json', 'w') as f:
+        json.dump(id2probs, f, indent=4)
+    
+    return ids, img_ids
 
-    #             img_ids.add(img_id)
-    #             ids.add(id)
-                
-    #         elif id in ids and prob > id2probs[id]['prob']: ## update, better image
-    #             img_ids.remove(id2probs[id]['img_id'])
-    #             img_ids.add(img_id)
-    #             id2probs[id]['img_id'] = img_id
-    #             id2probs[id]['prob'] = prob
-            
-    assert len(id2probs.keys()) == len(ids)
-
+def store_new_layer(id2probs):
+    with open('/home/donghee/inversecooking/recipe1M/layer2.json', 'r') as f:
+        layer2 = json.load(f)
+    
     for id, images in id2probs.items():
-        new_layer.append({
+        layer2.append({
             'id': id,
             'images':[{
                 'id':images['img_id'],
@@ -109,12 +98,11 @@ def detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im
             }]
         })
 
-    print(f'** num: {num}, # detected images (total): {len(img_ids)-original_img_ids_len} ({cnt}), detected ids (original layer2 ids): {len(ids)}({len(layer2_ids)})')
+    new_layer2_ids = [entry['id'] for entry in layer2]
+    assert len(new_layer2_ids) == len(set(new_layer2_ids))
 
     with open('/home/donghee/inversecooking/layer2_download.json', 'w') as f:
-        json.dump(new_layer, f, indent=4)
-    
-    return ids, img_ids
+        json.dump(layer2, f, indent=4)
 
 
 def img_prob(model, images, text):
@@ -179,7 +167,7 @@ def new_layer_setup(layer2):
     json_img_ids = json.dumps(list(img_ids))
     json_layer2_ids = json.dumps(list(layer2_ids))
 
-    with open('/home/donghee/inversecooking/img_ids.json', 'w') as f:
+    with open('/home/donghee/inversecooking/layer2_img_ids.json', 'w') as f:
         f.write(json_img_ids)
     
     with open('/home/donghee/inversecooking/layer2_ids.json', 'w') as f:
@@ -218,9 +206,9 @@ def ids_store(ids, img_ids):
     json_ids = json.dumps(list(ids))
 
     with open('/home/donghee/inversecooking/ids_download.json', 'w') as f:
-        f.write(json_img_ids)
-    with open('/home/donghee/inversecooking/img_ids_download.json', 'w') as f:
         f.write(json_ids)
+    with open('/home/donghee/inversecooking/img_ids_download.json', 'w') as f:
+        f.write(json_img_ids)
 
 def reporthook(count, block_size, total_size):
     """
@@ -236,21 +224,26 @@ if __name__ == '__main__':
     threshold = 0.90 ####
     batch_size = 256
     num_workers = 16
+    num = '0'
 
     with open('/home/donghee/inversecooking/recipe1M+/layer2+.json', 'r') as f:
         layer2p = json.load(f)
     with open('/home/donghee/inversecooking/recipe1M/layer2.json', 'r') as f:
         layer2 = json.load(f)
-    with open('/home/donghee/inversecooking/layer2_ids.json', 'r') as f:
-        layer2_ids = json.load(f)
     
     if resume:
         with open('/home/donghee/inversecooking/ids_download.json', 'r') as f:
-            ids = json.load(f)
+            ids = json.load(f) 
         with open('/home/donghee/inversecooking/img_ids_download.json', 'r') as f:
             img_ids = json.load(f)
+        with open('/home/donghee/inversecooking/layer2_ids.json', 'r') as f:
+            layer2_ids = json.load(f)
     else:
-        img_ids, layer2_ids = new_layer_setup(layer2)
+        # img_ids, layer2_ids = new_layer_setup(layer2)
+        with open('/home/donghee/inversecooking/layer2_img_ids.json', 'r') as f:
+            img_ids = json.load(f)
+        with open('/home/donghee/inversecooking/layer2_ids.json', 'r') as f:
+            layer2_ids = json.load(f)
         ids = []
     
     im2id, im2url = layer2_setup(layer2p)
@@ -274,39 +267,40 @@ if __name__ == '__main__':
 
     ## 여기부터!
     base_path = '/home/donghee/inversecooking/recipe1M+'
-    nums = ['0', '1', '2','3','4','5','6','7','8','9','a','b','c','d','e','f']
     base_url = 'http://data.csail.mit.edu/im2recipe/recipe1M+_images/recipe1M+_'
+
+    nums = ['0', '1', '2','3','4','5','6','7','8','9','a','b','c','d','e','f']
     img_paths = [os.path.join(base_path, num) for num in nums]
     # urls = [base_url+num+'.tar' for num in nums]
-    skip_nums = set(['0'])
 
-    for i, (num, img_path) in enumerate(zip(nums, img_paths)):
+    # for i, (num, img_path) in enumerate(zip(nums, img_paths)):
         
-        print(f"** Start {num} **")
-        url = base_url + num + '.tar'
-        if num in skip_nums:
-            tar_file_path = '/home/donghee/inversecooking/recipe1M+/recipe1M+_0.tar'
-        else:
-            tar_file_path = f'/home/donghee/inversecooking/src/recipe1M+_{num}.tar'
-            urllib.request.urlretrieve(url, tar_file_path, reporthook)
-            subprocess.run(['tar', '-xvf', tar_file_path, '-C', base_path]) ##
-            os.remove(tar_file_path) ##
-        
-        dataset = Recipe1M(root=img_path, transform = preprocess)
-        dataloader = DataLoader(dataset, batch_size = batch_size, num_workers = num_workers, shuffle=False)
-        ids, img_ids = detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im2id, im2url, threshold, num, original_img_ids_len)
-        ids_store(ids, img_ids)
-        delete_paths = img_paths[:i+1]
-        delete_img(img_ids, delete_paths)
-        
-        remain_files = 0
-        for path in delete_paths:
-            remain_files += count_files(path)
-        
-        print(f'** Done {num} **')
-        print("# remain images: ", remain_files)
-        
+    print(f"** Start {num} **")
+    url = base_url + num + '.tar'
+    tar_file_path = f'/home/donghee/inversecooking/recipe1M+/recipe1M+_{num}.tar'
+    # urllib.request.urlretrieve(url, tar_file_path, reporthook)
+    subprocess.run(['tar', '-xvf', tar_file_path, '-C', base_path]) ## ## TODO
+    os.remove(tar_file_path) ##
+    
+    img_path = os.path.join(base_path, num)
+    dataset = Recipe1M(root=img_path, transform = preprocess)
+    dataloader = DataLoader(dataset, batch_size = batch_size, num_workers = num_workers, shuffle=False)
 
-    print(f"*** Total # ids with matching image (original layer2): {len(ids)}({len(layer2_ids)}), Total # images extended(original layer2 images): {len(img_ids)}({original_img_ids_len})")
+    ids, img_ids = detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im2id, im2url, threshold, num)
+    ids_store(ids, img_ids)
+
+    i = nums.index(num)
+    delete_paths = img_paths[:i+1]
+    delete_img(img_ids, delete_paths)
+    
+    remain_files = 0
+    for path in delete_paths:
+        remain_files += count_files(path)
+    
+    print(f'** Done {num} **')
+    print("# remain images: ", remain_files)
+
+    print(f"*** added # ids with matching image (original layer2): {len(ids)}({len(layer2_ids)}), Total # images extended(original layer2 images): {len(img_ids)}({original_img_ids_len})")
     print("DONE")
+    ## TODO store_new_layer
     
