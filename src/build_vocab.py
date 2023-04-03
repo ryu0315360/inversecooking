@@ -153,25 +153,25 @@ def build_vocab_recipe1m(args):
     print ("Loading data...")
     dets = json.load(open(os.path.join(args.recipe1m_path, 'det_ingrs.json'), 'r'))
     layer1 = json.load(open(os.path.join(args.recipe1m_path, 'layer1.json'), 'r'))
-    layer2 = json.load(open(os.path.join(args.recipe1m_path, 'layer2_1M_clean.json'), 'r'))
+    layer2 = json.load(open(os.path.join(args.recipe1m_path, 'layer2.json'), 'r'))
     layer_quantity = json.load(open('/home/donghee/inversecooking/recipe1M+/recipes_with_nutritional_info.json', 'r'))
-    non_foods = json.load(open('/home/donghee/inversecooking/non_food.json', 'r'))
-    layer2_origin = json.load(open(os.path.join(args.recipe1m_path, 'layer2.json'), 'r'))
+    # non_foods = json.load(open('/home/donghee/inversecooking/non_food.json', 'r'))
+    # layer2_origin = json.load(open(os.path.join(args.recipe1m_path, 'layer2.json'), 'r'))
 
-    origin_ids = []
-    for entry in layer2_origin:
-        ims = entry['images']
-        for im in ims:
-            origin_ids.append(im['id'])
+    # origin_ids = []
+    # for entry in layer2_origin:
+    #     ims = entry['images']
+    #     for im in ims:
+    #         origin_ids.append(im['id'])
     
-    origin_ids = set(origin_ids) ## 887536
+    # origin_ids = set(origin_ids) ## 887536
     
-    non_food_ids = []
-    for non_food in non_foods:
-        non_food_ids.append(non_food.split('/')[-1])
-    non_food_ids = set(non_food_ids) ## 220117
+    # non_food_ids = []
+    # for non_food in non_foods:
+    #     non_food_ids.append(non_food.split('/')[-1])
+    # non_food_ids = set(non_food_ids) ## 220117
 
-    non_food_ids = non_food_ids - origin_ids ## 138404
+    # non_food_ids = non_food_ids - origin_ids ## 138404
 
     id2im = {}
 
@@ -331,53 +331,65 @@ def build_vocab_recipe1m(args):
         ingrs_list = []
         images_list = []
 
-        if entry['id'] in id2im.keys():
-            ims = layer2[id2im[entry['id']]]
+        # if entry['id'] in id2im.keys():
+        #     ims = layer2[id2im[entry['id']]]
 
-            # copy image paths for this recipe
-            for im in ims['images']:
-                if im['id'] in non_food_ids:
-                    non_food_cnt += 1
-                    continue
-                images_list.append(im['id'])
+        #     # copy image paths for this recipe
+        #     for im in ims['images']:
+        #         if im['id'] in non_food_ids:
+        #             non_food_cnt += 1
+        #             continue
+        #         images_list.append(im['id'])
         
-        if len(images_list) == 0:
-            continue ## no image
+        # if len(images_list) == 0:
+        #     continue ## no image
 
         ### Quantity
         quantity_list = []
         unit_list = []
-        if entry['id'] in id2quantity.keys():
-            info = layer_quantity[id2quantity[entry['id']]]
-            for q, u in zip(info['quantity'], info['unit']):
-                quantity_str = q['text']
+        # if entry['id'] in id2quantity.keys():
+        #     info = layer_quantity[id2quantity[entry['id']]]
+        #     for q, u in zip(info['quantity'], info['unit']):
+        #         quantity_str = q['text']
 
                 
-                if 'to' in quantity_str or '-' in quantity_str: ## 'to', '-' 경우 둘 중 하나 평균처리..
-                    quantity_str = quantity_str.split('-')
-                    if len(quantity_str) ==1:
-                        quantity_str = quantity_str[0].split('to')
+        #         if 'to' in quantity_str or '-' in quantity_str: ## 'to', '-' 경우 둘 중 하나 평균처리..
+        #             quantity_str = quantity_str.split('-')
+        #             if len(quantity_str) ==1:
+        #                 quantity_str = quantity_str[0].split('to')
                     
-                    quantity1 = sum(Fraction(s) for s in quantity_str[0].split())
-                    quantity2 = sum(Fraction(s) for s in quantity_str[1].split())
-                    quantity_float1 = float(quantity1)
-                    quantity_float2 = float(quantity2)
-                    quantity_float = (quantity_float1 + quantity_float2) / 2
+        #             quantity1 = sum(Fraction(s) for s in quantity_str[0].split())
+        #             quantity2 = sum(Fraction(s) for s in quantity_str[1].split())
+        #             quantity_float1 = float(quantity1)
+        #             quantity_float2 = float(quantity2)
+        #             quantity_float = (quantity_float1 + quantity_float2) / 2
                 
-                else:
-                    quantity = sum(Fraction(s) for s in quantity_str.split())
-                    quantity_float = float(quantity)
+        #         else:
+        #             quantity = sum(Fraction(s) for s in quantity_str.split())
+        #             quantity_float = float(quantity)
 
              
-                    # print("fraction error: ", quantity_str)
-                    # quantity_list = []
-                    # unit_list = []
+        #             # print("fraction error: ", quantity_str)
+        #             # quantity_list = []
+        #             # unit_list = []
                     
 
-                quantity_list.append(quantity_float) ## 1/2 -> 0.5
-                unit_list.append(u['text'])
-        # else:
+        #         quantity_list.append(quantity_float) ## 1/2 -> 0.5
+        #         unit_list.append(u['text'])
+        # else: ### Quantity Only
         #     continue ## no quantity
+        
+        if entry['id'] in id2quantity.keys():
+            info = layer_quantity[id2quantity[entry['id']]]
+            assert len(info['weight_per_ingr']) == len(info['quantity']) and len(info['weight_per_ingr']) == len(info['ingredients'])
+            for w, u in zip(info['weight_per_ingr'], info['unit']):
+                weight = float(w)
+
+                quantity_list.append(weight)
+                unit_list.append(u['text'])
+        
+        else:
+            continue
 
         ###
 
@@ -409,7 +421,12 @@ def build_vocab_recipe1m(args):
         #         or acc_len < args.minnumwords:
         #     continue
 
+        if entry['id'] in id2im.keys():
+            ims = layer2[id2im[entry['id']]]
 
+            # copy image paths for this recipe
+            for im in ims['images']:
+                images_list.append(im['id'])
 
         # tokenize sentences
         # toks = []
@@ -428,8 +445,8 @@ def build_vocab_recipe1m(args):
                     'ingredients': ingrs_list, 'quantity': quantity_list, 'unit': unit_list, 'images': images_list, 'title': title}
         dataset[entry['partition']].append(newentry)
 
-    print("len of non food: ", len(non_food_ids))
-    print("skipped non food count: ", non_food_cnt)
+    # print("len of non food: ", len(non_food_ids))
+    # print("skipped non food count: ", non_food_cnt)
     print('Dataset size:')
     for split in dataset.keys():
         print(split, ':', len(dataset[split]))
@@ -447,7 +464,7 @@ def main(args):
     #     pickle.dump(vocab_toks, f)
 
     for split in dataset.keys():
-        with open(os.path.join(args.save_path, args.suff+'food_recipe1m_' + split + '.pkl'), 'wb') as f:
+        with open(os.path.join(args.save_path, args.suff+'weight_recipe1m_' + split + '.pkl'), 'wb') as f:
             pickle.dump(dataset[split], f)
 
 
