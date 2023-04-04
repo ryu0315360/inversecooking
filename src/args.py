@@ -86,8 +86,8 @@ def get_parser():
     parser.add_argument('--finetune_after', type=int, default=-1,
                         help='epoch to start training cnn. -1 is never, 0 is from the beginning')
 
-    parser.add_argument('--loss_weight', nargs='+', type=float, default=[1000.0, 1000.0, 1.0, 1.0],
-                        help='training loss weights. 1) ingredient, 2) quantity, 3) eos 4) cardinality')
+    parser.add_argument('--loss_weight', nargs='+', type=float, default=[0.001, 1000.0, 1.0, 1.0],
+                        help='training loss weights. 1) quantity, 2) ingredient, 3) eos 4) cardinality') ## 원래는 1000.0, 1000.0, 1.0, 1.0
 
     parser.add_argument('--max_eval', type=int, default=4096,
                         help='number of validation samples to evaluate during training')

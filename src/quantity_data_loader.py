@@ -24,7 +24,7 @@ class Recipe1MDataset(data.Dataset):
         if split == 'val_origin':
             self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/recipe1m_'+'val'+'.pkl'), 'rb'))
         else:
-            self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/food_recipe1m_'+split+'.pkl'), 'rb'))## food_recipe1m
+            self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/download_recipe1m_'+split+'.pkl'), 'rb'))## weight_recipe1m
         self.label2word = self.get_ingrs_vocab()
 
         self.use_lmdb = use_lmdb
@@ -32,11 +32,15 @@ class Recipe1MDataset(data.Dataset):
             if split == 'val_origin':
                 self.image_file = lmdb.open(os.path.join(aux_data_dir, 'lmdb_' + 'val'), max_readers=1, readonly=True,
                                         lock=False, readahead=False, meminit=False)
+                self.extended_image_file = self.image_file
             else:
-                self.image_file = lmdb.open(os.path.join(aux_data_dir, 'extended_lmdb_' + split), max_readers=1, readonly=True,
+                self.image_file = lmdb.open(os.path.join(aux_data_dir, 'lmdb_' + split), max_readers=1, readonly=True,
+                                        lock=False, readahead=False, meminit=False)
+                self.extended_image_file = lmdb.open(os.path.join(aux_data_dir, 'download_lmdb_' + split), max_readers=1, readonly=True,
                                         lock=False, readahead=False, meminit=False)
                                     
-
+        with open('/home/donghee/inversecooking/layer2_ids.json', 'r') as f:
+            self.layer2_ids = set(json.load(f))
         self.ids = []
         self.split = split
         for i, entry in enumerate(self.dataset):
@@ -121,7 +125,7 @@ class Recipe1MDataset(data.Dataset):
             unit_gt = np.zeros(len(self.ingrs_vocab)-1)
             exist_quantity = False
 
-            if len(quantity) != 0 and len(labels) == pos: ## if there's quantity data and all the ingredients are valid, unique
+            if len(quantity) != 0 and len(labels) == pos: ## if there's quantity data and all the ingredients are valid, unique ## 모든 ingr가 제대로 매핑
                 exist_quantity = True
                 i = 0
                 while ilabels_gt[i] != 0: ## until end
@@ -153,8 +157,12 @@ class Recipe1MDataset(data.Dataset):
                 img_idx = 0
             path = paths[img_idx]
             if self.use_lmdb:
+                if sample['id'] in self.layer2_ids:
+                    lmdb_file = self.image_file
+                else:
+                    lmdb_file = self.extended_image_file
                 try:
-                    with self.image_file.begin(write=False) as txn:
+                    with lmdb_file.begin(write=False) as txn:
                         image = txn.get(path.encode())
                         image = np.fromstring(image, dtype=np.uint8)
                         image = np.reshape(image, (256, 256, 3)) ## TODO 여기서 shape 안 맞아
@@ -199,7 +207,7 @@ def collate_fn_quantity(data): ## quantity 데이터 있는 경우만 사용...
     # Sort a data list by caption length (descending order).
     # data.sort(key=lambda x: len(x[2]), reverse=True)
     # image_input, captions, ingrs_gt, img_id, path, pad_value = zip(*data)
-    data = [sample for sample in data if torch.sum(sample[2]) != 0] ## 여기서 valid 하지 않은 경우는.. quantity data가 들어왔지만, ingredient로 맵핑하는 과정에서 정확히 다 매핑이 안 돼서 버려지는 거ㅠ
+    data = [sample for sample in data if torch.sum(sample[2]) != 0 and sample[0] != None] ## 여기서 valid 하지 않은 경우는.. quantity data가 들어왔지만, ingredient로 맵핑하는 과정에서 정확히 다 매핑이 안 돼서 버려지는 거ㅠ
 
     if not data:
         return None

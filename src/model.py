@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import random
 import numpy as np
-from modules.encoder import EncoderCNN, EncoderLabels
+from modules.encoder import EncoderCNN, EncoderLabels, EncoderViT
 from modules.transformer_decoder import DecoderTransformer
 from modules.multihead_attention import MultiheadAttention
 from utils.metrics import softIoU, MaskedCrossEntropyCriterion
@@ -45,14 +45,117 @@ def mask_from_eos(ids, eos_value, mult_before=True):
             mask[:, idx] = mask[:, idx] * mask_aux
     return mask
 
+class Inverse_Quantity(nn.Module):
+    def __init__(self, inverse_model, quantity_model, quantity_only, train_ingr_only, weighted_loss):
+        super().__init__()
 
-def get_model(args, ingr_vocab_size, instrs_vocab_size):
+        self.inverse_model = inverse_model
+        self.quantity_model = quantity_model
+        self.quantity_criterion = nn.MSELoss(reduce = False)
+        self.quantity_criterion = self.quantity_criterion.to(device)
+        self.quantity_only = quantity_only
+        self.train_ingr_only = train_ingr_only
+        self.weighted_loss = weighted_loss
+
+    def forward(self, img_inputs, ingr_gt, quantity_gt, sample = False, keep_cnn_gradients=False):
+        
+        if sample:
+            outputs = self.inverse_model.sample(img_inputs, greedy=True)
+            if self.train_ingr_only:
+                return outputs
+
+            img_embedding = self.inverse_model.image_encoder(img_inputs.to(device), keep_cnn_gradients = False)
+            pred_quantity = self.quantity_model(img_embedding)
+            outputs['quantity'] = pred_quantity
+            return outputs    
+        
+        img_inputs = img_inputs.to(device)
+        ingr_gt = ingr_gt.to(device)
+        quantity_gt = quantity_gt.to(device)
+
+        losses = self.inverse_model(img_inputs, captions = None, target_ingrs = ingr_gt, sample=False, keep_cnn_gradients=keep_cnn_gradients)
+
+        if not self.train_ingr_only:
+            img_embedding = self.inverse_model.image_encoder(img_inputs, keep_cnn_gradients=keep_cnn_gradients)
+            
+            if self.weighted_loss:
+                pred_quantity = self.quantity_model(img_embedding) ## img_embedding = (batch, 512, 49)
+                nonzero_mask = (quantity_gt > 0).float()
+                example_weights = nonzero_mask.sum(dim=1)
+                example_weights = example_weights / (example_weights.mean()+1e-8)
+
+                quantity_loss = self.quantity_criterion(pred_quantity, quantity_gt)
+                quantity_loss = (quantity_loss * nonzero_mask).sum(dim=1) / (nonzero_mask.sum(dim=1) + 1e-8)
+                quantity_loss = (quantity_loss * example_weights)
+            else:
+                pred_quantity = self.quantity_model(img_embedding) ## img_embedding = (batch, 512, 49)
+                quantity_loss = self.quantity_criterion(pred_quantity, quantity_gt)
+
+            no_quantity = (torch.sum(quantity_gt) == 0) ## if no quantity, assign quantity_loss 0
+            quantity_loss[no_quantity] = 0.0
+
+            quantity_loss = quantity_loss.mean()
+            losses['quantity_loss'] = quantity_loss
+        
+        losses['ingr_loss'] = losses['ingr_loss'].mean()
+        losses['eos_loss'] = losses['eos_loss'].mean()
+        losses['card_penalty'] = losses['card_penalty'].mean()
+
+        return losses
+
+class Quantity_MLP(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super().__init__()
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, output_size)
+    
+    def forward(self, x):
+        x = self.global_pool(x)
+        # x = x.reshape(x.shape[0], -1)
+        x = x.view(x.size()[0], -1)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        x = self.relu(x)
+        x = self.fc3(x)
+        
+        return x
+
+class Quantity_TF(nn.Module):
+    def __init__(self, embed_size, num_ingredients, num_layers=3, nhead=8, dropout = 0.3):
+        super(Quantity_TF, self).__init__()
+        self.num_ingredients = num_ingredients
+        self.transformer_layers = nn.ModuleList([nn.TransformerDecoderLayer(d_model=embed_size, nhead=nhead, dropout=dropout) for _ in range(num_layers)])
+        self.fc = nn.Linear(embed_size, num_ingredients-1)
+
+    def forward(self, img_features): ## (batch, 512, 49)
+        # Use a transformer decoder to predict the quantity for each ingredient
+        img_features = img_features.permute(0, 2, 1)  # swap second and third dimensions
+        output = img_features.transpose(0, 1)   # (seq_len, batch_size, embed_size)
+        for layer in self.transformer_layers:
+            output = layer(output, output)  # (seq_len, batch_size, embed_size)
+        # output = output.transpose(0, 1)  # (batch_size, seq_len, embed_size)
+        output = output[-1]
+
+        # Use a linear layer to map the output of the decoder to the predicted quantities
+        output = self.fc(output)
+
+        return output
+
+def get_model(args, ingr_vocab_size, instrs_vocab_size, train_ingr_only, ViT = False):
 
     # build ingredients embedding
     encoder_ingrs = EncoderLabels(args.embed_size, ingr_vocab_size,
                                   args.dropout_encoder, scale_grad=False).to(device)
     # build image model
-    encoder_image = EncoderCNN(args.embed_size, args.dropout_encoder, args.image_model)
+    if ViT:
+        encoder_image = EncoderViT(args.embed_size)
+    else:
+        encoder_image = EncoderCNN(args.embed_size, args.dropout_encoder, args.image_model)
+    
 
     decoder = DecoderTransformer(args.embed_size, instrs_vocab_size,
                                  dropout=args.dropout_decoder_r, seq_length=args.maxseqlen,
@@ -80,11 +183,18 @@ def get_model(args, ingr_vocab_size, instrs_vocab_size):
     label_loss = nn.BCELoss(reduce=False)
     eos_loss = nn.BCELoss(reduce=False)
 
-    model = InverseCookingModel(encoder_ingrs, decoder, ingr_decoder, encoder_image,
+    inverse_model = InverseCookingModel(encoder_ingrs, decoder, ingr_decoder, encoder_image,
                                 crit=criterion, crit_ingr=label_loss, crit_eos=eos_loss,
                                 pad_value=ingr_vocab_size-1,
                                 ingrs_only=args.ingrs_only, recipe_only=args.recipe_only,
                                 label_smoothing=args.label_smoothing_ingr)
+
+    #### 밑에 두줄 추가
+    quantity_model = Quantity_TF(embed_size = args.embed_size, num_ingredients = ingr_vocab_size, num_layers=args.transf_layers_quantity)
+    # quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
+
+    model = Inverse_Quantity(inverse_model, quantity_model, args.quantity_only, train_ingr_only, args.weighted_loss)
+    ####
 
     return model
 

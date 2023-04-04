@@ -92,6 +92,78 @@ def count_layer2():
     print(len(id))
     print(len(set(id)))
 
+def count_nut_layer():
+    with open("/home/donghee/inversecooking/recipe1M+/recipes_with_nutritional_info.json", 'r') as f:
+        nut_layer = json.load(f)
+    print(len(nut_layer))
+
+    ingr2unit = dict()
+    for entry in nut_layer:
+        ingrs = entry['ingredients']
+        units = entry['unit']
+
+        for ingr, unit in zip(ingrs, units):
+            ingr = ingr['text'].split()[0]
+            unit = unit['text']
+            if ingr in ingr2unit.keys():
+                ingr2unit[ingr].add(unit)
+            else:
+                ingr2unit[ingr] = set()
+                ingr2unit[ingr].add(unit)
+    
+    n_unit = 0
+    for k, v in ingr2unit.items():
+        ingr2unit[k] = list(v)
+        n_unit += len(v)
+    
+    n_unit = n_unit / len(ingr2unit.keys())
+    print("Average # units per ingr item: ", n_unit) ## 7.5
+    
+    # print(ingr2unit)
+    with open('/home/donghee/inversecooking/recipe1M+/ingr2unit.json', 'w') as f:
+        json.dump(ingr2unit, f, indent=4)
+
+def check_nut_ingr():
+    with open("/home/donghee/inversecooking/recipe1M+/recipes_with_nutritional_info.json", 'r') as f:
+        nut_layer = json.load(f)
+    with open('/home/donghee/inversecooking/recipe1M/layer1.json', 'r') as f:
+        layer1 = json.load(f)
+    
+    nut_id2ingr = dict()
+    units = set()
+    ingrs = set()
+
+    for entry in nut_layer:
+        nut_id2ingr[entry['id']] = len(entry['ingredients'])
+        for unit in entry['unit']:
+            units.add(unit['text'])
+        for ingr in entry['ingredients']:
+            ingrs.add(ingr['text'].split()[0])
+    
+    id2ingr = dict()
+    for entry in layer1:
+        id2ingr[entry['id']] = len(entry['ingredients'])
+    
+    cnt = 0
+    total = 0
+    for id, ingr in nut_id2ingr.items():
+        total += 1
+        cnt += (ingr != id2ingr[id])
+    
+    # print(f'unmatched samples (total): {cnt} ({total})') ## cnt = 0
+
+    # print("len of units: ", len(units))
+    # print(units)
+    print("# ingrs in nut_layer: ", len(ingrs))
+    print(ingrs)
+
+def check_pkl():
+    args = pickle.load(open('/home/donghee/inversecooking/results/origin_inverse/im2ingr/checkpoints/args.pkl', 'rb'))
+    print(args)
+
 # single_food_counter()
 # count_ids()
-count_layer2()
+# count_layer2()
+# count_nut_layer()
+# check_nut_ingr()
+check_pkl()

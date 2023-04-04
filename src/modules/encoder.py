@@ -5,7 +5,28 @@ import torch
 import torch.nn as nn
 import random
 import numpy as np
+from vit_pytorch import ViT
+import timm
 
+class EncoderViT(nn.Module):
+    def __init__(self, embed_size):
+        super(EncoderViT, self).__init__()
+
+        # self.vit = ViT(image_size = 224, patch_size = 16, num_classes = 1000, dim = 768, depth=12, heads=12, mlp_dim=3072, dropout=0.1, emb_dropout=0.1)
+        self.vit = timm.create_model('vit_base_patch16_224', pretrained=True)
+        self.vit = nn.Sequential(*list(self.vit.children())[:-1])
+        self.linear = nn.Linear(768, embed_size)
+    
+    def forward(self, images, keep_cnn_gradients = False):
+        if keep_cnn_gradients:
+            raw_conv_feats = self.vit(images)
+        else:
+            with torch.no_grad():
+                raw_conv_feats = self.vit(images)
+        features = self.linear(raw_conv_feats) ## raw_conv_feats = (batch, 196, 768)
+        features = features.permute(0, 2, 1) ## feature = (batch, 196, 512) -> (batch, 512, 196)
+
+        return features
 
 class EncoderCNN(nn.Module):
     def __init__(self, embed_size, dropout=0.5, image_model='resnet101', pretrained=True):
@@ -26,9 +47,9 @@ class EncoderCNN(nn.Module):
             raw_conv_feats = self.resnet(images)
         else:
             with torch.no_grad():
-                raw_conv_feats = self.resnet(images)
-        features = self.linear(raw_conv_feats)
-        features = features.view(features.size(0), features.size(1), -1)
+                raw_conv_feats = self.resnet(images) ## (batch, 2048, 7, 7)
+        features = self.linear(raw_conv_feats) ## feaetures = (batch_size, embed_size = 512, 7, 7)
+        features = features.view(features.size(0), features.size(1), -1) ## (batch_size, embed_size, 7*7 = 49)
 
         return features
 

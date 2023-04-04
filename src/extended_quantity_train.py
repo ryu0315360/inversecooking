@@ -1,6 +1,8 @@
 from args import get_parser
 import torch
 import torch.nn as nn
+import torchvision.models as models
+from einops.layers.torch import Rearrange
 import torch.autograd as autograd
 import numpy as np
 import os
@@ -52,6 +54,39 @@ class Quantity_MLP(nn.Module):
         
         return x
 
+# class Quantity_TF(nn.Module):
+#     def __init__(self, num_classes):
+#         super(Quantity_TF, self).__init__()
+#         self.backbone = models.vit_base_patch16_224(pretrained=True)
+#         self.rearrange = Rearrange('b e h w -> b (h w) e')
+#         self.fc = nn.linear(512, num_classes)
+    
+#     def forward(self, x):
+#         x = self.backbone(x)
+#         x = self.rearrange(x)
+#         x = self.fc(x)
+#         return x
+
+class Quantity_TF(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes, num_layers=3):
+        super(Quantity_TF, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_classes = num_classes
+        self.num_layers = num_layers
+        self.embedding = nn.Linear(input_size, hidden_size)
+        self.transformer_layers = nn.ModuleList([nn.TransformerEncoderLayer(hidden_size, nhead=8) for _ in range(num_layers)])
+        self.fc = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x):
+        x = self.embedding(x)
+        x = x.permute(1, 0, 2)
+        for layer in self.transformer_layers:
+            x = layer(x)
+        x = x.permute(1, 0, 2)
+        x = self.fc(x)
+        return x.squeeze()
+
 class Inverse_Quantity(nn.Module):
     def __init__(self, inverse_model, quantity_model):
         super().__init__()
@@ -70,9 +105,10 @@ class Inverse_Quantity(nn.Module):
         ingr_gt = ingr_gt.to(device)
         quantity_gt = quantity_gt.to(device)
 
-        losses = self.inverse_model(img_inputs, captions = None, target_ingrs = ingr_gt)
+        # losses = self.inverse_model(img_inputs, captions = None, target_ingrs = ingr_gt)
      
         with torch.no_grad():
+            losses = self.inverse_model(img_inputs, captions = None, target_ingrs = ingr_gt)
             img_embedding = self.inverse_model.image_encoder(img_inputs, keep_cnn_gradients=False)
         
         pred_quantity = self.quantity_model(img_embedding) ## img_embedding = (batch, 512, 49)
@@ -120,12 +156,13 @@ def main(args):
     #######
     mode = 'train'
     save_dir = '/home/donghee/inversecooking/results'
-    project_name = 'train_ingr_only'
-    model_name = 'from_best_cnn'
-    train_ingr_only = True
+    project_name = 'quantity_only_tf'
+    model_name = 'from_best'
+    train_ingr_only = False
+    train_quantity_only = True
     resume = True
     resume_model_path = '/home/donghee/inversecooking/data/modelbest.ckpt'
-    cnn_train = True
+    cnn_train = False
     # resume_optim_path = '/home/donghee/inversecooking/results/train_ingr_only/from_best/checkpoints/optim.ckpt'
     #######
 
@@ -239,7 +276,8 @@ def main(args):
         ## from_best 이면 lr 좀 더 작게 해야하지 않을까..
 
     else:
-        quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
+        # quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
+        quantity_model = Quantity_TF(input_size=512*49, hidden_size=512, num_classes=1488, num_layers=3) ## TODO hardcode here
         inverse_model = get_model(args, ingr_vocab_size, 23231) ## TODO hardcode here
         keep_cnn_gradients = False
 
@@ -249,24 +287,27 @@ def main(args):
         for p in inverse_model.parameters():
             p.requires_grad = False
 
-        for p in inverse_model.image_encoder.linear.parameters():
-            p.requires_grad = True
+        # for p in inverse_model.image_encoder.linear.parameters():
+        #     p.requires_grad = True
         
         # for p in inverse_model.ingredient_decoder.parameters():
         #     p.requires_grad = True
         
-        model = Inverse_Quantity(inverse_model, quantity_model)
-        decay_factor = 1.0
+        if train_quantity_only:
+            model = quantity_model
+            params = list(model.parameters())
+        else:
+            model = Inverse_Quantity(inverse_model, quantity_model)
+            decay_factor = 1.0
+            params = list(model.quantity_model.parameters())
 
         # params = list(inverse_model.ingredient_decoder.parameters())
-        params = list(model.quantity_model.parameters())
-        params_linear = list(model.inverse_model.image_encoder.linear.parameters())
+        # params = list(model.quantity_model.parameters())
+        # params_linear = list(model.inverse_model.image_encoder.linear.parameters())
         # params += params_quantity
-        params += params_linear
+        # params += params_linear
 
         print ("quantity decoder params:", sum(p.numel() for p in params if p.requires_grad))
-        print ("image linear params:", sum(p.numel() for p in params_linear if p.requires_grad))
-
         optimizer = torch.optim.Adam(params, lr=args.learning_rate)
 
     # if resume:
@@ -725,7 +766,7 @@ if __name__ == "__main__":
     parser.add_argument('--maxnumlabels', type=int, default=20,
                         help='maximum number of ingredients per sample')
     parser.add_argument('--num_workers', type=int, default=8)
-    parser.add_argument('--learning_rate', type=float, default= 1e-04,
+    parser.add_argument('--learning_rate', type=float, default= 1e-03,
                     help='base learning rate') ## learning rate 0.0001 에서 바꿈
     
 
