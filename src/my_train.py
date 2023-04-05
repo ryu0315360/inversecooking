@@ -79,7 +79,7 @@ def main(args):
     args.finetune_after = 0 ## 0이면 cnn train
 
     args.save_dir = '/home/donghee/inversecooking/results'
-    args.project_name = 'origin_inverse'
+    args.project_name = 'test'
     args.model_name = 'from_scratch(1M+)'
 
     args.extended_1M = True
@@ -164,13 +164,13 @@ def main(args):
                                                     (0.229, 0.224, 0.225)))
 
         transform = transforms.Compose(transforms_list)
-        max_num_samples = max(args.max_eval, args.batch_size) if split == 'val' else -1
+        max_num_samples = max(args.max_eval, args.batch_size) if split == 'val' or split == 'val_origin' else -1
         data_loaders[split], datasets[split] = get_loader(data_dir, args.aux_data_dir, split,
                                                           args.maxseqlen,
                                                           args.maxnuminstrs,
                                                           args.maxnumlabels,
                                                           args.maxnumims,
-                                                          transform, args.batch_size,
+                                                          transform, args.batch_size, args.extended_1M,
                                                           shuffle=split == 'train', num_workers=args.num_workers,
                                                           drop_last=True,
                                                           max_num_samples=max_num_samples,

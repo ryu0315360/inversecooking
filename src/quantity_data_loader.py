@@ -16,15 +16,21 @@ import lmdb
 
 class Recipe1MDataset(data.Dataset):
 
-    def __init__(self, data_dir, aux_data_dir, split, maxseqlen, maxnuminstrs, maxnumlabels, maxnumims,
+    def __init__(self, data_dir, aux_data_dir, split, maxseqlen, maxnuminstrs, maxnumlabels, maxnumims, extended_1M,
                  transform=None, max_num_samples=-1, use_lmdb=False, suff=''):
 
         self.ingrs_vocab = pickle.load(open('/home/donghee/inversecooking/data/recipe1m_vocab_ingrs.pkl', 'rb'))
         self.instrs_vocab = pickle.load(open(os.path.join(aux_data_dir, suff + 'recipe1m_vocab_toks.pkl'), 'rb'))
-        if split == 'val_origin':
-            self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/recipe1m_'+'val'+'.pkl'), 'rb'))
-        else:
-            self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/download_recipe1m_'+split+'.pkl'), 'rb'))## weight_recipe1m
+
+        if extended_1M:
+            if split == 'val_origin':
+                self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/recipe1m_'+'val'+'.pkl'), 'rb'))
+            else:
+                self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/download_recipe1m_'+split+'.pkl'), 'rb'))## weight_recipe1m
+        
+        else: ## original 1M data
+            self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/recipe1m_'+split+'.pkl'), 'rb'))
+
         self.label2word = self.get_ingrs_vocab()
 
         self.use_lmdb = use_lmdb
@@ -250,7 +256,7 @@ def collate_fn_valid_image(data):
 
 
 def get_loader(data_dir, aux_data_dir, split, maxseqlen,
-               maxnuminstrs, maxnumlabels, maxnumims, transform, batch_size,
+               maxnuminstrs, maxnumlabels, maxnumims, transform, batch_size, extended_1M,
                shuffle, num_workers, drop_last=False,
                max_num_samples=-1,
                use_lmdb=False,
@@ -258,7 +264,7 @@ def get_loader(data_dir, aux_data_dir, split, maxseqlen,
 
     dataset = Recipe1MDataset(data_dir=data_dir, aux_data_dir=aux_data_dir, split=split,
                               maxseqlen=maxseqlen, maxnumlabels=maxnumlabels, maxnuminstrs=maxnuminstrs,
-                              maxnumims=maxnumims,
+                              maxnumims=maxnumims, extended_1M=extended_1M,
                               transform=transform,
                               max_num_samples=max_num_samples,
                               use_lmdb=use_lmdb,
