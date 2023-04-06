@@ -188,17 +188,17 @@ def get_model(args, ingr_vocab_size, instrs_vocab_size, train_ingr_only=False):
     else:
         semantic_branch = None
 
-    model = InverseCookingModel(encoder_ingrs, decoder, ingr_decoder, encoder_image, semantic_branch, ## semantic_branch
+    inverse_model = InverseCookingModel(encoder_ingrs, decoder, ingr_decoder, encoder_image, semantic_branch, ## semantic_branch
                                 crit=criterion, crit_ingr=label_loss, crit_eos=eos_loss,
                                 pad_value=ingr_vocab_size-1,
                                 ingrs_only=args.ingrs_only, recipe_only=args.recipe_only,
                                 label_smoothing=args.label_smoothing_ingr)
 
     #### 밑에 추가
-    # quantity_model = Quantity_TF(embed_size = args.embed_size, num_ingredients = ingr_vocab_size, num_layers=args.transf_layers_quantity)
-    # # quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
+    quantity_model = Quantity_TF(embed_size = args.embed_size, num_ingredients = ingr_vocab_size, num_layers=args.transf_layers_quantity)
+    # quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
 
-    # model = Inverse_Quantity(inverse_model, quantity_model, args.quantity_only, train_ingr_only, args.weighted_loss)
+    model = Inverse_Quantity(inverse_model, quantity_model, args.quantity_only, train_ingr_only, args.weighted_loss)
     ####
 
     return model

@@ -80,7 +80,7 @@ def main(args):
 
     args.save_dir = '/home/donghee/inversecooking/results'
     args.project_name = 'test'
-    args.model_name = 'from_scratch(1M+)'
+    args.model_name = 'ViT_1M+(val_1M)'
 
     args.extended_1M = True
 
@@ -99,10 +99,13 @@ def main(args):
     args.weighted_loss = False
     args.aux_data_dir = '/home/donghee/inversecooking/data'
 
-    args.ViT = False
+    args.ViT = True
+    args.semantic = False
 
     if args.quantity_only:
         args.loss_weight[0] = 1.0
+    
+    args.log_term = False ## if true, print out results in stead of saving to file
     ########
 
     # Create model directory & other aux folders for logging
@@ -184,7 +187,7 @@ def main(args):
 
 
     # Build the model
-    model = get_model(args, ingr_vocab_size, 23231, train_ingr_only, ViT = args.ViT) ## TODO instrs_vocab_size != 23231 ㅠㅠ
+    model = get_model(args, ingr_vocab_size, 23231, train_ingr_only) ## TODO instrs_vocab_size != 23231 ㅠㅠ
 
     keep_cnn_gradients = False
 
@@ -239,6 +242,8 @@ def main(args):
                 if isinstance(v, torch.Tensor):
                     state[k] = v.to(device)
         model.load_state_dict(torch.load(model_path, map_location=map_loc))
+
+    model.load_state_dict(torch.load('/home/donghee/inversecooking/results/ingr_only_ViT/from_scratch(1M)/checkpoints/modelbest.ckpt', map_location=map_loc))
 
     if args.transfer_from != '':
         # loads CNN encoder from transfer_from model
@@ -301,7 +306,7 @@ def main(args):
                                'iou': [], 'perplexity': [], 'iou_sample': [],
                                'f1': [],
                                'card_penalty': [],
-                               'quantity_loss': []}
+                               'quantity_loss': [], 'semantic_loss': []}
 
             error_types = {'tp_i': 0, 'fp_i': 0, 'fn_i': 0, 'tn_i': 0,
                            'tp_all': 0, 'fp_all': 0, 'fn_all': 0}
@@ -315,17 +320,18 @@ def main(args):
                 # if loader.next() is None:
                 #     continue
 
-                # img_inputs, ingr_gt, quantity_gt, recipe_ids, img_ids = loader.next()
-                img_inputs, ingr_gt, quantity_gt, recipe_ids, img_ids = next(loader)
+                img_inputs, ingr_gt, quantity_gt, class_gt, recipe_ids, img_ids = next(loader)
+
                 img_inputs = img_inputs.to(device)
                 ingr_gt = ingr_gt.to(device)
                 quantity_gt = quantity_gt.to(device)
+                class_gt = class_gt.to(device)
                 cnt += img_inputs.shape[0]
                 loss_dict = {}
 
                 if split == 'val':
                     with torch.no_grad():
-                        losses = model.forward(img_inputs, ingr_gt, quantity_gt)
+                        losses = model.forward(img_inputs, ingr_gt, quantity_gt, class_gt)
 
                         outputs = model.forward(img_inputs, ingr_gt, quantity_gt, sample = True)
 
@@ -344,7 +350,7 @@ def main(args):
                         del outputs, pred_one_hot, target_one_hot, iou_sample
 
                 else: ## train
-                    losses = model(img_inputs, ingr_gt, quantity_gt, keep_cnn_gradients = keep_cnn_gradients)
+                    losses = model(img_inputs, ingr_gt, quantity_gt, class_gt, keep_cnn_gradients = keep_cnn_gradients)
 
                 if not train_ingr_only:
                     quantity_loss = losses['quantity_loss']
@@ -372,17 +378,28 @@ def main(args):
                 else:
                     ingr_loss, eos_loss, card_penalty = 0, 0, 0
                 
+                if args.semantic:
+                    mask = losses['semantic_loss'] != 0
+                    semantic_loss = losses['semantic_loss'][mask]
+                    semantic_loss = semantic_loss.mean()
+                    loss_dict['semantic_loss'] = semantic_loss.item()
+                else:
+                    semantic_loss = 0
+                
                 loss = args.loss_weight[0] * quantity_loss + args.loss_weight[1] * ingr_loss \
-                       + args.loss_weight[2]*eos_loss + args.loss_weight[3]*card_penalty
+                       + args.loss_weight[2]*eos_loss + args.loss_weight[3]*card_penalty + args.loss_weight[4]*semantic_loss
 
                 loss_dict['loss'] = loss.item()
 
+                if args.semantic:
+                    semantic_loss = semantic_loss.item()
+
                 if args.quantity_only:
-                    logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss (quantity) : {loss.item()}')
+                    logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss (quantity) : {loss.item()}, semantic_loss: {semantic_loss}')
                 elif train_ingr_only:
-                    logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}')
+                    logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}, semantic_loss: {semantic_loss}')
                 elif args.ingr_quantity_train:
-                    logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, quantity_loss ={quantity_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}')
+                    logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, quantity_loss ={quantity_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}, semantic_loss: {semantic_loss}')
 
                 for key in loss_dict.keys():
                     total_loss_dict[key].append(loss_dict[key])

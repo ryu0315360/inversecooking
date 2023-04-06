@@ -186,6 +186,11 @@ class Recipe1MDataset(data.Dataset):
                 image = self.transform(image)
             image_input = image
 
+        ## class
+        class_gt = np.array([sample['classes']])
+        class_gt = torch.from_numpy(class_gt).long()
+        ####
+
         # Convert caption (string) to word ids. ## instructions
         # caption = []
 
@@ -195,7 +200,7 @@ class Recipe1MDataset(data.Dataset):
         # caption = caption[0:self.maxseqlen]
         # target = torch.Tensor(caption)
 
-        return image_input, ingrs_gt, quantity_gt, img_id, path
+        return image_input, ingrs_gt, quantity_gt, class_gt, img_id, path
 
     def __len__(self):
         return len(self.ids)
@@ -218,13 +223,14 @@ def collate_fn_quantity(data): ## quantity 데이터 있는 경우만 사용...
     if not data:
         return None
     
-    image_input, ingrs_gt, quantity_gt, img_id, path = zip(*data)
+    image_input, ingrs_gt, quantity_gt, class_gt, img_id, path = zip(*data)
 
     # Merge images (from tuple of 3D tensor to 4D tensor).
 
     image_input = torch.stack(image_input, 0)
     ingrs_gt = torch.stack(ingrs_gt, 0)
     quantity_gt = torch.stack(quantity_gt,0) ## Q) 이거 왜 하는거지ㅠ
+    class_gt = torch.concat(class_gt)
     # title = torch.stack(title, 0)
 
     # Merge captions (from tuple of 1D tensor to 2D tensor).
@@ -235,7 +241,7 @@ def collate_fn_quantity(data): ## quantity 데이터 있는 경우만 사용...
     #     end = lengths[i]
     #     targets[i, :end] = cap[:end]
 
-    return image_input, ingrs_gt, quantity_gt, img_id, path
+    return image_input, ingrs_gt, quantity_gt, class_gt, img_id, path
 
 def collate_fn_valid_image(data):
 
@@ -244,15 +250,16 @@ def collate_fn_valid_image(data):
     if not data:
         return None
     
-    image_input, ingrs_gt, quantity_gt, img_id, path = zip(*data)
+    image_input, ingrs_gt, quantity_gt, class_gt, img_id, path = zip(*data)
 
     # Merge images (from tuple of 3D tensor to 4D tensor).
 
     image_input = torch.stack(image_input, 0)
     ingrs_gt = torch.stack(ingrs_gt, 0)
     quantity_gt = torch.stack(quantity_gt,0) ## Q) 이거 왜 하는거지ㅠ
+    class_gt = torch.concat(class_gt)
 
-    return image_input, ingrs_gt, quantity_gt, img_id, path
+    return image_input, ingrs_gt, quantity_gt, class_gt, img_id, path
 
 
 def get_loader(data_dir, aux_data_dir, split, maxseqlen,
