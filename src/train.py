@@ -20,6 +20,7 @@ from utils.tb_visualizer import Visualizer
 from model import mask_from_eos, label2onehot
 from utils.metrics import softIoU, compute_metrics, update_error_types
 import random
+import logging
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 map_loc = None if torch.cuda.is_available() else 'cpu'
 
@@ -68,6 +69,24 @@ def make_dir(d):
 
 
 def main(args):
+    ###
+    args.ViT = True
+    args.semantic = False
+
+    args.loss_weight = [1.0, 1000.0, 1.0, 1.0] ## recipe, ingr, eos, card_penalty
+
+    args.aux_data_dir = '/home/donghee/inversecooking/data'
+    args.save_dir = '/home/donghee/inversecooking/results'
+
+    args.project_name = '(original_code)'
+    args.model_name = 'ViT(1M)'
+    args.batch_size = 150
+    args.finetune_after = 0
+    args.ingrs_only = True
+    args.learning_rate = 0.0001
+    args.log_term = False ## if True, print all the outputs instead of logging in txt file
+    
+    ###
 
     # Create model directory & other aux folders for logging
     where_to_save = os.path.join(args.save_dir, args.project_name, args.model_name)
@@ -78,6 +97,9 @@ def main(args):
     make_dir(logs_dir)
     make_dir(checkpoints_dir)
     make_dir(tb_logs)
+
+    logging.basicConfig(filename = os.path.join(where_to_save, 'my_log.log'), level = logging.INFO)
+
     if args.tensorboard:
         logger = Visualizer(tb_logs, name='visual_results')
 
@@ -154,7 +176,11 @@ def main(args):
     # only train the linear layer in the encoder if we are not transfering from another model
     if args.transfer_from == '':
         params += list(model.image_encoder.linear.parameters())
-    params_cnn = list(model.image_encoder.resnet.parameters())
+
+    if args.ViT:
+        params_cnn = list(model.image_encoder.vit.parameters())
+    else:
+        params_cnn = list(model.image_encoder.resnet.parameters())
 
     print ("CNN params:", sum(p.numel() for p in params_cnn if p.requires_grad))
     print ("decoder params:", sum(p.numel() for p in params if p.requires_grad))
@@ -238,7 +264,7 @@ def main(args):
                                'iou': [], 'perplexity': [], 'iou_sample': [],
                                'f1': [],
                                'card_penalty': [],
-                               'quantity_loss': []}
+                               'quantity_loss': [], 'semantic_loss': []}
 
             error_types = {'tp_i': 0, 'fp_i': 0, 'fn_i': 0, 'tn_i': 0,
                            'tp_all': 0, 'fp_all': 0, 'fn_all': 0}
@@ -248,7 +274,7 @@ def main(args):
 
             for i in range(total_step):
 
-                img_inputs, captions, ingr_gt, img_ids, paths = loader.next()
+                img_inputs, captions, ingr_gt, img_ids, paths = next(loader)
 
                 ingr_gt = ingr_gt.to(device)
                 img_inputs = img_inputs.to(device)
@@ -321,6 +347,7 @@ def main(args):
                        + args.loss_weight[2]*eos_loss + args.loss_weight[3]*card_penalty
 
                 loss_dict['loss'] = loss.item()
+                logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}')
 
                 for key in loss_dict.keys():
                     total_loss_dict[key].append(loss_dict[key])

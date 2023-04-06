@@ -57,7 +57,7 @@ class Inverse_Quantity(nn.Module):
         self.train_ingr_only = train_ingr_only
         self.weighted_loss = weighted_loss
 
-    def forward(self, img_inputs, ingr_gt, quantity_gt, sample = False, keep_cnn_gradients=False):
+    def forward(self, img_inputs, ingr_gt, quantity_gt, class_gt, sample = False, keep_cnn_gradients=False):
         
         if sample:
             outputs = self.inverse_model.sample(img_inputs, greedy=True)
@@ -73,7 +73,7 @@ class Inverse_Quantity(nn.Module):
         ingr_gt = ingr_gt.to(device)
         quantity_gt = quantity_gt.to(device)
 
-        losses = self.inverse_model(img_inputs, captions = None, target_ingrs = ingr_gt, sample=False, keep_cnn_gradients=keep_cnn_gradients)
+        losses = self.inverse_model(img_inputs, captions = None, target_ingrs = ingr_gt, class_gt = class_gt, sample=False, keep_cnn_gradients=keep_cnn_gradients)
 
         if not self.train_ingr_only:
             img_embedding = self.inverse_model.image_encoder(img_inputs, keep_cnn_gradients=keep_cnn_gradients)
@@ -145,13 +145,13 @@ class Quantity_TF(nn.Module):
 
         return output
 
-def get_model(args, ingr_vocab_size, instrs_vocab_size, train_ingr_only, ViT = False):
+def get_model(args, ingr_vocab_size, instrs_vocab_size, train_ingr_only=False):
 
     # build ingredients embedding
     encoder_ingrs = EncoderLabels(args.embed_size, ingr_vocab_size,
                                   args.dropout_encoder, scale_grad=False).to(device)
     # build image model
-    if ViT:
+    if args.ViT:
         encoder_image = EncoderViT(args.embed_size)
     else:
         encoder_image = EncoderCNN(args.embed_size, args.dropout_encoder, args.image_model)
@@ -183,24 +183,29 @@ def get_model(args, ingr_vocab_size, instrs_vocab_size, train_ingr_only, ViT = F
     label_loss = nn.BCELoss(reduce=False)
     eos_loss = nn.BCELoss(reduce=False)
 
-    inverse_model = InverseCookingModel(encoder_ingrs, decoder, ingr_decoder, encoder_image,
+    if args.semantic:
+        semantic_branch = nn.Linear(args.embed_size, 1048) ## numClasses = 1048
+    else:
+        semantic_branch = None
+
+    model = InverseCookingModel(encoder_ingrs, decoder, ingr_decoder, encoder_image, semantic_branch, ## semantic_branch
                                 crit=criterion, crit_ingr=label_loss, crit_eos=eos_loss,
                                 pad_value=ingr_vocab_size-1,
                                 ingrs_only=args.ingrs_only, recipe_only=args.recipe_only,
                                 label_smoothing=args.label_smoothing_ingr)
 
-    #### 밑에 두줄 추가
-    quantity_model = Quantity_TF(embed_size = args.embed_size, num_ingredients = ingr_vocab_size, num_layers=args.transf_layers_quantity)
-    # quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
+    #### 밑에 추가
+    # quantity_model = Quantity_TF(embed_size = args.embed_size, num_ingredients = ingr_vocab_size, num_layers=args.transf_layers_quantity)
+    # # quantity_model = Quantity_MLP(input_size = args.embed_size, hidden_size = 1024, output_size = ingr_vocab_size-1)
 
-    model = Inverse_Quantity(inverse_model, quantity_model, args.quantity_only, train_ingr_only, args.weighted_loss)
+    # model = Inverse_Quantity(inverse_model, quantity_model, args.quantity_only, train_ingr_only, args.weighted_loss)
     ####
 
     return model
 
 
 class InverseCookingModel(nn.Module):
-    def __init__(self, ingredient_encoder, recipe_decoder, ingr_decoder, image_encoder,
+    def __init__(self, ingredient_encoder, recipe_decoder, ingr_decoder, image_encoder, semantic_branch,
                  crit=None, crit_ingr=None, crit_eos=None,
                  pad_value=0, ingrs_only=True,
                  recipe_only=False, label_smoothing=0.0):
@@ -218,8 +223,16 @@ class InverseCookingModel(nn.Module):
         self.recipe_only = recipe_only
         self.crit_eos = crit_eos
         self.label_smoothing = label_smoothing
+        self.semantic_branch = semantic_branch ## None or linear
+        if self.semantic_branch is not None:
+            weights_class = torch.Tensor(1048).fill_(1) ## numClasses = 1048
+            weights_class[0] = 0 # the background class is set to 0, i.e. ignore
+            # CrossEntropyLoss combines LogSoftMax and NLLLoss in one single class
+            self.semantic_crit = nn.CrossEntropyLoss(weight=weights_class).to(device)
+            self.pool = nn.AdaptiveAvgPool1d(1)
 
-    def forward(self, img_inputs, captions, target_ingrs,
+
+    def forward(self, img_inputs, captions, target_ingrs, class_gt=None,
                 sample=False, keep_cnn_gradients=False):
 
         if sample:
@@ -232,6 +245,17 @@ class InverseCookingModel(nn.Module):
         img_features = self.image_encoder(img_inputs, keep_cnn_gradients)
 
         losses = {}
+
+        ## semantic prediction #####
+        if self.semantic_branch is not None:
+            pool = self.pool(img_features).squeeze(-1)
+            class_prediction = self.semantic_branch(pool)
+            semantic_loss = self.semantic_crit(class_prediction, class_gt.squeeze(-1))
+            if torch.isnan(semantic_loss) and torch.sum(class_gt) == 0:
+                print("semantic loss error (all class_gt 0)") ## class_gt 다 0이기는 한데..
+                semantic_loss = torch.tensor(0.0).to(device) ## all class_gt = 0...
+            losses['semantic_loss'] = semantic_loss
+        
         target_one_hot = label2onehot(target_ingrs, self.pad_value)
         target_one_hot_smooth = label2onehot(target_ingrs, self.pad_value)
 
