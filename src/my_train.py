@@ -11,14 +11,14 @@ import pickle
 # from data_loader import get_loader
 from quantity_data_loader import get_loader, Recipe1MDataset
 from build_vocab import Vocabulary
-from model import get_model
+from my_model import get_model
 from torchvision import transforms
 import sys
 import json
 import time
 import torch.backends.cudnn as cudnn
 from utils.tb_visualizer import Visualizer
-from model import mask_from_eos, label2onehot
+from my_model import mask_from_eos, label2onehot
 from utils.metrics import softIoU, compute_metrics, update_error_types
 import random
 from tqdm import tqdm
@@ -79,12 +79,12 @@ def main(args):
     args.finetune_after = 0 ## 0이면 cnn train
 
     args.save_dir = '/home/donghee/inversecooking/results'
-    args.project_name = 'test'
+    args.project_name = 'test2'
     args.model_name = 'ViT_1M+(val_1M)'
 
     args.extended_1M = True
 
-    train_ingr_only = True
+    args.train_ingr_only = True
     args.quantity_only = False
     args.ingr_quantity_train = False
 
@@ -100,7 +100,8 @@ def main(args):
     args.aux_data_dir = '/home/donghee/inversecooking/data'
 
     args.ViT = True
-    args.semantic = False
+    args.semantic = False ## TODO vit-pytorch remove, torch 1.7 cuda 11.0로 다시 설치
+    args.n_classes = 1048
 
     if args.quantity_only:
         args.loss_weight[0] = 1.0
@@ -146,9 +147,9 @@ def main(args):
 
     data_dir = args.recipe1m_dir
     if args.extended_1M:
-        splits = ['train', 'val', 'val_origin']
+        splits = ['train', 'val_1M+', 'val_1M']
     else:
-        splits = ['train', 'val']
+        splits = ['train', 'val_1M']
     
     for split in splits:
 
@@ -167,7 +168,7 @@ def main(args):
                                                     (0.229, 0.224, 0.225)))
 
         transform = transforms.Compose(transforms_list)
-        max_num_samples = max(args.max_eval, args.batch_size) if split == 'val' or split == 'val_origin' else -1
+        max_num_samples = max(args.max_eval, args.batch_size) if split == 'val_1M' or split == 'val_1M+' else -1
         data_loaders[split], datasets[split] = get_loader(data_dir, args.aux_data_dir, split,
                                                           args.maxseqlen,
                                                           args.maxnuminstrs,
@@ -187,41 +188,44 @@ def main(args):
 
 
     # Build the model
-    model = get_model(args, ingr_vocab_size, 23231, train_ingr_only) ## TODO instrs_vocab_size != 23231 ㅠㅠ
+    model = get_model(args, ingr_vocab_size, 23231) ## TODO instrs_vocab_size != 23231 ㅠㅠ
 
     keep_cnn_gradients = False
 
     if inverse_from_best:
-        model.inverse_model.load_state_dict(torch.load(inverse_best_model, map_location=map_loc))
+        model.load_state_dict(torch.load(inverse_best_model, map_location=map_loc)) ## 될지 모르겠다ㅠ TODO
 
     decay_factor = 1.0
 
     # add model parameters
     if args.quantity_only:
-        params = list(model.quantity_model.parameters())
-        for p in model.inverse_model.parameters():
-            p.requires_grad = False
-    elif train_ingr_only:
-        params = list(model.inverse_model.ingredient_decoder.parameters())
-        for p in model.quantity_model.parameters():
-            p.requires_grad = False
+        params = list(model.quantity_decoder.parameters())
+        # for p in model.quantity_decoder.parameters():
+        #     p.requires_grad = True
+    elif args.train_ingr_only:
+        params = list(model.ingredient_decoder.parameters())
+        # for p in model.ingredient_decoder.parameters():
+        #     p.requires_grad = True
     elif args.ingr_quantity_train:
-        params = list(model.inverse_model.ingredient_decoder.parameters()) + list(model.quantity_model.parameters())
+        params = list(model.ingredient_decoder.parameters()) + list(model.quantity_decoder.parameters())
     # else:
     #     params = list(model.recipe_decoder.parameters()) + list(model.ingredient_decoder.parameters()) \
-    #             + list(model.ingredient_encoder.parameters())
+    #             + list(model.ingredient_decoder.parameters())
 
     # only train the linear layer in the encoder if we are not transfering from another model
     if args.transfer_from == '' and not args.quantity_only:
-        params += list(model.inverse_model.image_encoder.linear.parameters())
+        params += list(model.image_encoder.linear.parameters())
 
     if args.ViT:
-        params_cnn = list(model.inverse_model.image_encoder.vit.parameters())
+        params_cnn = list(model.image_encoder.vit.parameters())
     else:
-        params_cnn = list(model.inverse_model.image_encoder.resnet.parameters())
+        params_cnn = list(model.image_encoder.resnet.parameters())
+    
+    if args.semantic:
+        params += list(model.semantic_branch.parameters())
 
     print ("CNN params:", sum(p.numel() for p in params_cnn if p.requires_grad))
-    print ("decoder params:", sum(p.numel() for p in params if p.requires_grad))
+    print ("params:", sum(p.numel() for p in params if p.requires_grad))
     # start optimizing cnn from the beginning
     if params_cnn is not None and args.finetune_after == 0:
         optimizer = torch.optim.Adam([{'params': params}, {'params': params_cnn,
@@ -243,7 +247,7 @@ def main(args):
                     state[k] = v.to(device)
         model.load_state_dict(torch.load(model_path, map_location=map_loc))
 
-    model.load_state_dict(torch.load('/home/donghee/inversecooking/results/ingr_only_ViT/from_scratch(1M)/checkpoints/modelbest.ckpt', map_location=map_loc))
+    # model.load_state_dict(torch.load('/home/donghee/inversecooking/results/(original_code)/ViT(1M)/checkpoints/modelbest.ckpt', map_location=map_loc))
 
     if args.transfer_from != '':
         # loads CNN encoder from transfer_from model
@@ -301,7 +305,7 @@ def main(args):
             total_step = len(data_loaders[split])
             loader = iter(data_loaders[split])
 
-            total_loss_dict = {'quantity_loss': [], 'ingr_loss': [],
+            total_loss_dict = {'ingr_loss': [],
                                'eos_loss': [], 'loss': [],
                                'iou': [], 'perplexity': [], 'iou_sample': [],
                                'f1': [],
@@ -329,11 +333,11 @@ def main(args):
                 cnt += img_inputs.shape[0]
                 loss_dict = {}
 
-                if split == 'val':
+                if split == 'val_1M' or split == 'val_1M+':
                     with torch.no_grad():
-                        losses = model.forward(img_inputs, ingr_gt, quantity_gt, class_gt)
+                        losses = model.forward(img_inputs, captions = None, target_ingrs = ingr_gt, quantity_gt = quantity_gt, class_gt = class_gt)
 
-                        outputs = model.forward(img_inputs, ingr_gt, quantity_gt, sample = True)
+                        outputs = model.forward(img_inputs, sample = True)
 
                         ingr_ids_greedy = outputs['ingr_ids']
 
@@ -350,9 +354,9 @@ def main(args):
                         del outputs, pred_one_hot, target_one_hot, iou_sample
 
                 else: ## train
-                    losses = model(img_inputs, ingr_gt, quantity_gt, class_gt, keep_cnn_gradients = keep_cnn_gradients)
+                    losses = model.forward(img_inputs, captions = None, target_ingrs = ingr_gt, quantity_gt = quantity_gt, class_gt = class_gt, keep_cnn_gradients = keep_cnn_gradients)
 
-                if not train_ingr_only:
+                if not args.train_ingr_only:
                     quantity_loss = losses['quantity_loss']
                     quantity_loss = quantity_loss.mean()
                     loss_dict['quantity_loss'] = quantity_loss.item()
@@ -396,7 +400,7 @@ def main(args):
 
                 if args.quantity_only:
                     logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss (quantity) : {loss.item()}, semantic_loss: {semantic_loss}')
-                elif train_ingr_only:
+                elif args.train_ingr_only:
                     logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}, semantic_loss: {semantic_loss}')
                 elif args.ingr_quantity_train:
                     logging.info(f'** {split} Epoch [{epoch}/{args.num_epochs}], Step [{i}/{total_step}] ** total loss : {loss.item()}, ingr_loss = {ingr_loss.item()}, quantity_loss ={quantity_loss.item()}, eos_loss = {eos_loss.item()}, card_penalty = {card_penalty.item()}, semantic_loss: {semantic_loss}')
@@ -439,7 +443,7 @@ def main(args):
                 print("Total # datapoints: ", cnt)
                 logging.info(f'Total # datapoints: {cnt}')
             
-            if split == 'val' and not args.recipe_only:
+            if split == 'val_1M' or split == 'val_1M+' and not args.recipe_only:
                 ret_metrics = {'accuracy': [], 'f1': [], 'jaccard': [], 'f1_ingredients': [], 'dice': []}
                 compute_metrics(ret_metrics, error_types,
                                 ['accuracy', 'f1', 'jaccard', 'f1_ingredients', 'dice'], eps=1e-10,

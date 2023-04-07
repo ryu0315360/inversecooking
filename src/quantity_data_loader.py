@@ -23,8 +23,8 @@ class Recipe1MDataset(data.Dataset):
         self.instrs_vocab = pickle.load(open(os.path.join(aux_data_dir, suff + 'recipe1m_vocab_toks.pkl'), 'rb'))
 
         if extended_1M:
-            if split == 'val_origin':
-                self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/recipe1m_'+'val'+'.pkl'), 'rb'))
+            if split == 'val_1M':
+                self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/recipe1m_'+split+'.pkl'), 'rb'))
             else:
                 self.dataset = pickle.load(open(os.path.join('/home/donghee/inversecooking/data/download_recipe1m_'+split+'.pkl'), 'rb'))## weight_recipe1m
         
@@ -33,13 +33,19 @@ class Recipe1MDataset(data.Dataset):
 
         self.label2word = self.get_ingrs_vocab()
 
+        self.extended_1M = extended_1M
         self.use_lmdb = use_lmdb
         if use_lmdb:
-            if split == 'val_origin':
-                self.image_file = lmdb.open(os.path.join(aux_data_dir, 'lmdb_' + 'val'), max_readers=1, readonly=True,
+            if split == 'val_1M+':
+                self.image_file = lmdb.open(os.path.join(aux_data_dir, 'lmdb_' + 'val_1M'), max_readers=1, readonly=True,
+                                        lock=False, readahead=False, meminit=False)
+                self.extended_image_file = lmdb.open(os.path.join(aux_data_dir, 'download_lmdb_' + split), max_readers=1, readonly=True,
+                                        lock=False, readahead=False, meminit=False)
+            elif split == 'val_1M':
+                self.image_file = lmdb.open(os.path.join(aux_data_dir, 'lmdb_' + split), max_readers=1, readonly=True,
                                         lock=False, readahead=False, meminit=False)
                 self.extended_image_file = self.image_file
-            else:
+            else: ## train_1M+, train_1M,
                 self.image_file = lmdb.open(os.path.join(aux_data_dir, 'lmdb_' + split), max_readers=1, readonly=True,
                                         lock=False, readahead=False, meminit=False)
                 self.extended_image_file = lmdb.open(os.path.join(aux_data_dir, 'download_lmdb_' + split), max_readers=1, readonly=True,
@@ -144,7 +150,7 @@ class Recipe1MDataset(data.Dataset):
 
             quantity_gt = torch.from_numpy(quantity_gt).float()
         
-        except: ## no quantity (val_origin)
+        except: ## no quantity (val_1M)
             quantity_gt = np.zeros(len(self.ingrs_vocab)-1)
             quantity_gt = torch.from_numpy(quantity_gt).float()
         

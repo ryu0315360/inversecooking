@@ -7,12 +7,12 @@ import pickle
 import os
 from torchvision import transforms
 from build_vocab import Vocabulary
-from model import get_model
+from my_model import get_model
 from tqdm import tqdm
 from data_loader import get_loader
 import json
 import sys
-from model import mask_from_eos
+from my_model import mask_from_eos
 import random
 from utils.metrics import softIoU, update_error_types, compute_metrics
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

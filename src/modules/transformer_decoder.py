@@ -485,7 +485,47 @@ class DecoderTransformer(nn.Module):
                 state_dict['decoder.embed_positions._float_tensor'] = torch.FloatTensor()
         return state_dict
 
+class Quantity_MLP(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super().__init__()
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, output_size)
+    
+    def forward(self, x):
+        x = self.global_pool(x)
+        # x = x.reshape(x.shape[0], -1)
+        x = x.view(x.size()[0], -1)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        x = self.relu(x)
+        x = self.fc3(x)
+        
+        return x
 
+class Quantity_TF(nn.Module):
+    def __init__(self, embed_size, num_ingredients, num_layers=3, nhead=8, dropout = 0.3):
+        super(Quantity_TF, self).__init__()
+        self.num_ingredients = num_ingredients
+        self.transformer_layers = nn.ModuleList([nn.TransformerDecoderLayer(d_model=embed_size, nhead=nhead, dropout=dropout) for _ in range(num_layers)])
+        self.fc = nn.Linear(embed_size, num_ingredients-1)
+
+    def forward(self, img_features): ## (batch, 512, 49)
+        # Use a transformer decoder to predict the quantity for each ingredient
+        img_features = img_features.permute(0, 2, 1)  # swap second and third dimensions
+        output = img_features.transpose(0, 1)   # (seq_len, batch_size, embed_size)
+        for layer in self.transformer_layers:
+            output = layer(output, output)  # (seq_len, batch_size, embed_size)
+        # output = output.transpose(0, 1)  # (batch_size, seq_len, embed_size)
+        output = output[-1]
+
+        # Use a linear layer to map the output of the decoder to the predicted quantities
+        output = self.fc(output)
+
+        return output
 
 def Embedding(num_embeddings, embedding_dim, padding_idx, ):
     m = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx)

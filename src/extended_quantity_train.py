@@ -10,14 +10,14 @@ import random
 import pickle
 from quantity_data_loader import get_loader, Recipe1MDataset
 from build_vocab import Vocabulary
-from model import get_model
+from my_model import get_model
 from torchvision import transforms
 import sys
 import json
 import time
 import torch.backends.cudnn as cudnn
 from utils.tb_visualizer import Visualizer
-from model import mask_from_eos, label2onehot
+from my_model import mask_from_eos, label2onehot
 from utils.metrics import softIoU, compute_metrics, update_error_types
 import random
 from tqdm import tqdm
