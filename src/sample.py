@@ -7,12 +7,12 @@ import pickle
 import os
 from torchvision import transforms
 from build_vocab import Vocabulary
-from my_model import get_model
+from model import get_model
 from tqdm import tqdm
 from data_loader import get_loader
 import json
 import sys
-from my_model import mask_from_eos
+from model import mask_from_eos
 import random
 from utils.metrics import softIoU, update_error_types, compute_metrics
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -46,6 +46,18 @@ def label2onehot(labels, pad_value):
 
 
 def main(args):
+    ###
+    args.save_dir = '/nfs_share/code/donghee/inversecooking/results'
+    args.project_name = '(original_code)'
+    args.model_name = 'ViT(1M)' ## train ViT with 1M 
+    args.eval_split = 'test_1M'
+    args.recipe1m_dir = '/nfs_share/code/donghee/inversecooking/data'
+    args.aux_data_dir = '/nfs_share/code/donghee/inversecooking/data'
+
+    args.ingrs_only = True
+
+    ## TODO instruction decoder None 하면 안될 것 같아 나중에 train 시킬지도 모르니까,,
+    ## TODO get_loader pickle 간단화
 
     where_to_save = os.path.join(args.save_dir, args.project_name, args.model_name)
     checkpoints_dir = os.path.join(where_to_save, 'checkpoints')

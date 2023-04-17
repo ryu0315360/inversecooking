@@ -9,7 +9,7 @@ import os
 import random
 import pickle
 # from data_loader import get_loader
-from quantity_data_loader import get_loader, Recipe1MDataset
+from inversecooking.src.my_data_loader import get_loader, Recipe1MDataset
 from build_vocab import Vocabulary
 from my_model import get_model
 from torchvision import transforms
@@ -79,14 +79,14 @@ def main(args):
     args.finetune_after = 0 ## 0이면 cnn train
 
     args.save_dir = '/home/donghee/inversecooking/results'
-    args.project_name = 'test2'
-    args.model_name = 'ViT_1M+(val_1M)'
+    args.project_name = 'ingr_quantity'
+    args.model_name = 'ViT(1M)'
 
-    args.extended_1M = True
+    args.extended_1M = False
 
-    args.train_ingr_only = True
+    args.train_ingr_only = False
     args.quantity_only = False
-    args.ingr_quantity_train = False
+    args.ingr_quantity_train = True
 
     inverse_from_best = False
     inverse_best_model = '/home/donghee/inversecooking/data/modelbest.ckpt'
@@ -100,7 +100,7 @@ def main(args):
     args.aux_data_dir = '/home/donghee/inversecooking/data'
 
     args.ViT = True
-    args.semantic = False ## TODO vit-pytorch remove, torch 1.7 cuda 11.0로 다시 설치
+    args.semantic = False
     args.n_classes = 1048
 
     if args.quantity_only:

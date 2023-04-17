@@ -26,8 +26,11 @@ class Recipe1M(datasets.ImageFolder):
 
 def detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im2id, im2url, threshold, num):
 
-    with open('/home/donghee/inversecooking/id2probs.json', 'r') as f:
-        id2probs = json.load(f)
+    if num == '0':
+        id2probs = {}
+    else:
+        with open('/home/donghee/inversecooking/id2probs.json', 'r') as f:
+            id2probs = json.load(f)
     # dir_path = os.path.join('/home/donghee/inversecooking/recipe1M+', i)
 
     # id2probs = {}## 'id': {'img_id': img_id, 'probs': probs}
@@ -61,7 +64,7 @@ def detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im
 
                 id2probs[id] = {
                     'img_id': img_id,
-                    'prob': prob
+                    'prob': float(prob)
                 }
 
                 img_ids.add(img_id)
@@ -71,12 +74,12 @@ def detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im
                 img_ids.remove(id2probs[id]['img_id'])
                 img_ids.add(img_id)
                 id2probs[id]['img_id'] = img_id
-                id2probs[id]['prob'] = prob          
+                id2probs[id]['prob'] = float(prob)          
     
     assert len(id2probs.keys()) == len(set(id2probs.keys())) ## ids 중복 없어야 함
     intersection = layer2_ids & set(id2probs.keys())
     assert len(intersection) == 0
-    assert len(ids) == len(img_ids)
+    # assert len(ids) == len(img_ids)
 
     print(f'** num: {num}, # detected images (total): {len(img_ids)-original_img_ids_len} ({cnt}), detected ids (original layer2 ids): {len(ids)}({len(layer2_ids)})')
 
@@ -85,9 +88,13 @@ def detect_img(model, preprocess, dataloader, text, layer2_ids, ids, img_ids, im
     
     return ids, img_ids
 
-def store_new_layer(id2probs):
+def store_new_layer():
     with open('/home/donghee/inversecooking/recipe1M/layer2.json', 'r') as f:
         layer2 = json.load(f)
+    with open('/home/donghee/inversecooking/id2probs.json', 'r') as f:
+        id2probs = json.load(f)
+    with open('/home/donghee/inversecooking/im2url.json') as f:
+        im2url = json.load(f)
     
     for id, images in id2probs.items():
         layer2.append({
@@ -100,9 +107,9 @@ def store_new_layer(id2probs):
 
     new_layer2_ids = [entry['id'] for entry in layer2]
     assert len(new_layer2_ids) == len(set(new_layer2_ids))
-
-    with open('/home/donghee/inversecooking/layer2_download.json', 'w') as f:
-        json.dump(layer2, f, indent=4)
+    print(len(new_layer2_ids))
+    # with open('/home/donghee/inversecooking/layer2_download.json', 'w') as f:
+    #     json.dump(layer2, f, indent=4)
 
 
 def img_prob(model, images, text):
@@ -218,13 +225,14 @@ def reporthook(count, block_size, total_size):
     percent = int(progress_size * 100 / total_size)
     print(f"\rDownloading... {percent}% [{progress_size}/{total_size}]", end='')
 
-if __name__ == '__main__':
+def main():
 
-    resume = False
+    # resume = False
     threshold = 0.90 ####
-    batch_size = 256
+    batch_size = 512
     num_workers = 16
-    num = '0'
+    num = '3'
+    resume = num != '0'
 
     with open('/home/donghee/inversecooking/recipe1M+/layer2+.json', 'r') as f:
         layer2p = json.load(f)
@@ -300,7 +308,8 @@ if __name__ == '__main__':
     print(f'** Done {num} **')
     print("# remain images: ", remain_files)
 
-    print(f"*** added # ids with matching image (original layer2): {len(ids)}({len(layer2_ids)}), Total # images extended(original layer2 images): {len(img_ids)}({original_img_ids_len})")
+    print(f"*** added # ids with matching image (original layer2): {len(ids)}({len(layer2_ids)}), Total # images (original images): {len(img_ids)}({original_img_ids_len})")
     print("DONE")
     ## TODO store_new_layer
-    
+
+store_new_layer()

@@ -8,7 +8,7 @@ import numpy as np
 import os
 import random
 import pickle
-from quantity_data_loader import get_loader, Recipe1MDataset
+from inversecooking.src.my_data_loader import get_loader, Recipe1MDataset
 from build_vocab import Vocabulary
 from my_model import get_model
 from torchvision import transforms

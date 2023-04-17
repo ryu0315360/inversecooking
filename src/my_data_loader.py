@@ -236,7 +236,7 @@ def collate_fn_quantity(data): ## quantity 데이터 있는 경우만 사용...
     image_input = torch.stack(image_input, 0)
     ingrs_gt = torch.stack(ingrs_gt, 0)
     quantity_gt = torch.stack(quantity_gt,0) ## Q) 이거 왜 하는거지ㅠ
-    class_gt = torch.concat(class_gt)
+    class_gt = torch.stack(class_gt, 0)
     # title = torch.stack(title, 0)
 
     # Merge captions (from tuple of 1D tensor to 2D tensor).
@@ -263,7 +263,7 @@ def collate_fn_valid_image(data):
     image_input = torch.stack(image_input, 0)
     ingrs_gt = torch.stack(ingrs_gt, 0)
     quantity_gt = torch.stack(quantity_gt,0) ## Q) 이거 왜 하는거지ㅠ
-    class_gt = torch.concat(class_gt)
+    class_gt = torch.stack(class_gt, 0)
 
     return image_input, ingrs_gt, quantity_gt, class_gt, img_id, path
 
